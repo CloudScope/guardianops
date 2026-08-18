@@ -307,8 +307,10 @@ Being explicit, because these gaps are load-bearing:
 - **Local state.** The ledger, pins and baseline are files. Production wants
   ClickHouse for traces, Postgres for control plane, S3 Object Lock for the
   ledger.
-- **No multi-tenancy, no console, no policy DSL.** Config is one JSON file — no
-  per-agent or per-tenant policy bundles.
+- **No multi-tenancy, no console, no policy DSL.** One policy governs one proxy.
+  Policies can be built programmatically (`Config.from_dict`) as well as loaded
+  from JSON, but there are no per-agent or per-tenant policy bundles, and no
+  language for expressing rules beyond the config schema.
 - **The ledger is tamper-evident, not tamper-proof.** Anyone who can write the
   file can recompute the whole chain. Production wants an HMAC keyed outside the
   agent host, or records shipped to an append-only sink as they are written.
