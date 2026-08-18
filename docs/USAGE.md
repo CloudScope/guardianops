@@ -53,8 +53,86 @@ pip install "guardianops[adk]"       # adds google-adk and mcp for Path B
 
 Python 3.11+. Installing puts a `guardianops` command on your PATH.
 
-From a checkout, `pip install -e .` — or skip installing entirely and run
-`python3 -m guardianops` from the repo root.
+### Without PyPI, or without installing at all
+
+It is stdlib-only, which makes it usable as plain source. All four of these are
+verified working:
+
+```bash
+# straight from the repo, no PyPI
+pip install "git+https://github.com/CloudScope/guardianops.git"
+
+# from a built wheel
+pip install ./dist/guardianops-0.1.0-py3-none-any.whl
+
+# no install: point PYTHONPATH at a checkout, from any directory
+PYTHONPATH=/path/to/guardianops python3 -m guardianops report
+```
+
+```python
+# no install, no PYTHONPATH: vendor the package folder into your own project.
+# Copy guardianops/ (160 KB, no dependencies) and put its parent on sys.path.
+import sys; sys.path.insert(0, "thirdparty")
+from guardianops import policy
+```
+
+Or ship it as **one executable file**, which needs neither a virtualenv nor a
+Python project:
+
+```bash
+python3 -m zipapp guardianops-src -m "guardianops.cli:main" \
+    -o guardianops.pyz -p "/usr/bin/env python3"
+
+./guardianops.pyz report --audit .guardianops/ledger/     # runs as a CLI
+PYTHONPATH=guardianops.pyz python3 -c "from guardianops import policy"  # and imports
+```
+
+The `.pyz` is ~120 KB and self-contained. The `[adk]` extra is the only thing
+that genuinely needs a package manager, because it pulls in google-adk.
+
+### Depending on it from another project
+
+Until it is on PyPI, depend on the repository directly. Both forms below are
+verified installing.
+
+`requirements.txt`:
+
+```
+guardianops @ git+https://github.com/CloudScope/guardianops.git@v0.1.0
+guardianops[adk] @ git+https://github.com/CloudScope/guardianops.git@v0.1.0
+```
+
+`pyproject.toml`:
+
+```toml
+[project]
+dependencies = [
+  "guardianops[adk] @ git+https://github.com/CloudScope/guardianops.git@v0.1.0",
+]
+```
+
+Pin to a **tag or commit sha**, never a branch. `@main` reinstalls something
+different every time the branch moves, which is not a dependency so much as a
+subscription.
+
+Local sources work the same way, which is what you want while developing both
+sides at once:
+
+```
+-e /path/to/guardianops                       # editable checkout
+./vendor/guardianops-0.1.0-py3-none-any.whl   # a wheel you were handed
+```
+
+> **A direct reference blocks your own PyPI upload.** PyPI rejects packages
+> whose metadata contains a `git+` dependency, so if the consuming project is
+> itself published, it cannot depend on GuardianOps this way. That is the one
+> case where GuardianOps has to be on PyPI first.
+
+Once published, all of the above collapses to:
+
+```
+guardianops[adk]>=0.1,<0.2
+```
 
 ---
 
