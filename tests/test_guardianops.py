@@ -6,6 +6,8 @@ Run with:  python3 -m unittest discover -s tests -v
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -657,6 +659,363 @@ class TestJsonRpc(unittest.TestCase):
         encoded = jsonrpc.encode({"a": "multi\nline"})
         self.assertEqual(encoded.count(b"\n"), 1)
         self.assertTrue(encoded.endswith(b"\n"))
+
+
+class TestConfigConstruction(unittest.TestCase):
+    """load(), from_dict() and from_json_string() must agree on everything."""
+
+    POLICY = {
+        "name": "svc",
+        "mode": "enforce",
+        "auditPath": "state/audit.jsonl",
+        "tools": {
+            "allow": ["read_document"],
+            "tiers": {"read": ["read_document"]},
+            "constraints": {"read_document": {"doc_id": {"prefix": ["kb/"]}}},
+        },
+        "approval": {"requireFor": ["destructive"], "timeoutSeconds": 5},
+        "scope": {"terms": ["billing"], "threshold": 0.5},
+    }
+
+    def test_from_dict_matches_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "policy.json"
+            path.write_text(json.dumps(self.POLICY))
+            from_file = policy.Config.load(str(path))
+            from_dict = policy.Config.from_dict(self.POLICY, source=str(path))
+            from_json = policy.Config.from_json_string(
+                json.dumps(self.POLICY), source=str(path)
+            )
+            for other in (from_dict, from_json):
+                self.assertEqual(other.mode, from_file.mode)
+                self.assertEqual(other.allow, from_file.allow)
+                self.assertEqual(other.tiers, from_file.tiers)
+                self.assertEqual(other.audit_path, from_file.audit_path)
+                self.assertEqual(other.baseline_path, from_file.baseline_path)
+                self.assertEqual(other.pin.path, from_file.pin.path)
+                self.assertEqual(other.approval.timeout_seconds, 5)
+                self.assertEqual(other.scope.terms, ["billing"])
+                self.assertIn("doc_id", other.constraints["read_document"])
+
+    def test_name_defaults_to_file_stem_only_for_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "prod.json"
+            path.write_text("{}")
+            self.assertEqual(policy.Config.load(str(path)).name, "prod")
+        self.assertEqual(policy.Config.from_dict({}).name, "programmatic")
+
+    def test_absolute_source_anchors_next_to_the_policy(self):
+        """A state path is relative to the policy, not to whoever launched us."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = str(Path(tmp).resolve() / "policy.json")
+            cfg = policy.Config.from_dict({"auditPath": "state/audit.jsonl"}, source=source)
+            self.assertEqual(
+                cfg.audit_path, str(Path(tmp).resolve() / "state" / "audit.jsonl")
+            )
+
+    def test_no_source_anchors_to_cwd(self):
+        cfg = policy.Config.from_dict({"auditPath": "state/audit.jsonl"})
+        self.assertEqual(cfg.audit_path, str(Path.cwd() / "state" / "audit.jsonl"))
+
+    def test_absolute_state_paths_are_left_alone(self):
+        cfg = policy.Config.from_dict({"auditPath": "/var/log/audit.jsonl"})
+        self.assertEqual(cfg.audit_path, "/var/log/audit.jsonl")
+
+
+class TestConfigValidation(unittest.TestCase):
+
+    def test_defaults_and_shipped_configs_are_valid(self):
+        """A validator that rejects its own defaults is worse than none."""
+        self.assertEqual(policy.Config().validate(), [])
+        root = Path(__file__).resolve().parent.parent
+        for name in ("config.example.json", "config.adk.json", "config.shadow.json"):
+            path = root / name
+            if path.exists():
+                self.assertEqual(policy.Config.load(str(path)).validate(), [], name)
+
+    def test_control_tier_is_recognised(self):
+        cfg = policy.Config.from_dict({
+            "tools": {"tiers": {"control": ["transfer_to_agent"]}},
+            "approval": {"contextExemptTiers": ["control"]},
+        })
+        self.assertEqual(cfg.validate(), [])
+
+    def test_custom_tier_is_a_legal_reference(self):
+        cfg = policy.Config.from_dict({
+            "tools": {"tiers": {"finance": ["wire_transfer"]}},
+            "approval": {"requireFor": ["finance"]},
+        })
+        self.assertEqual(cfg.validate(), [])
+
+    def test_misspelled_tier_reference_is_caught(self):
+        cfg = policy.Config.from_dict({"approval": {"requireFor": ["destructiv"]}})
+        self.assertTrue(any("destructiv" in str(f) for f in cfg.validate()))
+
+    def test_bad_regex_is_caught_in_either_field_alone(self):
+        for field_name in ("pattern", "denyPattern"):
+            cfg = policy.Config.from_dict({
+                "tools": {
+                    "allow": ["t"],
+                    "constraints": {"t": {"a": {field_name: "([unclosed"}}},
+                }
+            })
+            errors = cfg.validate()
+            self.assertTrue(
+                any("invalid" in str(f) and field_name in str(f) for f in errors),
+                f"{field_name} not validated: {errors}",
+            )
+
+    def test_dotted_and_hyphenated_tool_names_are_valid(self):
+        """MCP servers publish these; the engine never treats a name as an identifier."""
+        cfg = policy.Config.from_dict({
+            "tools": {"allow": ["brave-search", "github.create_issue", "mcp__srv__do"]}
+        })
+        self.assertEqual(cfg.validate(), [])
+
+    def test_malformed_tool_names_are_caught(self):
+        cfg = policy.Config.from_dict({"tools": {"allow": ["has space", ""]}})
+        self.assertEqual(len(cfg.validate()), 2)
+
+    def test_unreachable_constraint_is_reported(self):
+        cfg = policy.Config.from_dict({
+            "tools": {"allow": ["a"], "constraints": {"b": {"x": {"required": True}}}}
+        })
+        self.assertTrue(any("can never apply" in str(f) for f in cfg.validate()))
+
+    def test_constraint_without_an_allowlist_is_fine(self):
+        """With no allowlist every tool is entitled, so the constraint does apply."""
+        cfg = policy.Config.from_dict({
+            "tools": {"constraints": {"b": {"x": {"required": True}}}}
+        })
+        self.assertEqual(cfg.validate(), [])
+
+    def test_allow_deny_overlap_is_reported(self):
+        cfg = policy.Config.from_dict({"tools": {"allow": ["a", "b"], "deny": ["b"]}})
+        self.assertTrue(any("overlap" in str(f) for f in cfg.validate()))
+
+    def test_enum_and_range_errors_accumulate(self):
+        cfg = policy.Config.from_dict({
+            "mode": "enfroce",
+            "defaultDecision": "maybe",
+            "auditSync": "sometimes",
+            "approval": {"timeoutSeconds": 0, "onTimeout": "shrug", "contextThreshold": 2.0},
+            "pin": {"onChange": "ignore"},
+            "scope": {"threshold": -1.0, "onOutOfScope": "shrug", "denyPatterns": ["([bad"]},
+            "scan": {"definitions": "nope", "responses": "nope"},
+        })
+        errors = cfg.errors()
+        self.assertEqual(len(errors), 12, errors)
+
+
+class TestValidateCommand(unittest.TestCase):
+
+    def _run(self, path):
+        from guardianops import cli
+        return cli.main(["validate", "--config", str(path)])
+
+    def test_valid_config_exits_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "policy.json"
+            path.write_text('{"mode": "enforce"}')
+            self.assertEqual(self._run(path), 0)
+
+    def test_invalid_config_exits_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "policy.json"
+            path.write_text('{"mode": "enfroce"}')
+            self.assertEqual(self._run(path), 1)
+
+    def test_unparseable_config_exits_two(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "policy.json"
+            path.write_text("{not json")
+            self.assertEqual(self._run(path), 2)
+
+    def test_missing_config_exits_two(self):
+        self.assertEqual(self._run("/nonexistent/policy.json"), 2)
+
+
+class TestUnknownKeys(unittest.TestCase):
+    """A key nothing reads is the failure that hides best."""
+
+    def test_misspelled_section_is_reported(self):
+        cfg = policy.Config.from_dict({"toolz": {"allow": ["a"], "deny": ["b"]}})
+        self.assertEqual(cfg.unknown_keys, ["toolz"])
+        self.assertTrue(any("unknown key" in str(f) for f in cfg.validate()))
+
+    def test_misspelled_section_silently_drops_the_allowlist(self):
+        """The reason this matters: the policy still parses, and governs nothing."""
+        cfg = policy.Config.from_dict({"mode": "enforce", "toolz": {"deny": ["export"]}})
+        self.assertEqual(cfg.deny, [])
+        self.assertTrue(cfg.entitled("export"))
+        self.assertNotEqual(cfg.validate(), [])
+
+    def test_unknown_keys_are_warnings_not_errors(self):
+        """A config written for a newer GuardianOps must still run here."""
+        cfg = policy.Config.from_dict({"tools": {"allow": ["a"]}, "futureFeature": True})
+        self.assertEqual(cfg.errors(), [])
+        self.assertEqual(len(cfg.validate()), 1)
+        self.assertEqual(cfg.validate()[0].severity, policy.WARNING)
+
+    def test_nested_and_constraint_keys_are_checked(self):
+        cfg = policy.Config.from_dict({
+            "tools": {
+                "allow": ["x"],
+                "denny": ["y"],
+                "constraints": {"x": {"a": {"prefx": ["/tmp"]}}},
+            },
+            "approval": {"timeoutSecondz": 5},
+            "pin": {"onChanged": "block"},
+            "scope": {"termz": []},
+            "scan": {"definitionz": "warn"},
+        })
+        self.assertEqual(cfg.unknown_keys, [
+            "approval.timeoutSecondz",
+            "pin.onChanged",
+            "scan.definitionz",
+            "scope.termz",
+            "tools.constraints.x.a.prefx",
+            "tools.denny",
+        ])
+
+    def test_shipped_configs_have_no_unknown_keys(self):
+        root = Path(__file__).resolve().parent.parent
+        for name in ("config.example.json", "config.adk.json", "config.shadow.json"):
+            path = root / name
+            if path.exists():
+                self.assertEqual(policy.Config.load(str(path)).unknown_keys, [], name)
+
+    def test_empty_redact_keys_warns(self):
+        cfg = policy.Config.from_dict({"redactKeys": []})
+        self.assertEqual(cfg.errors(), [])
+        self.assertTrue(any("redactKeys" == f.path for f in cfg.validate()))
+
+    def test_a_policy_must_be_an_object(self):
+        for bad in ([], "policy", 3, None):
+            with self.assertRaises(TypeError):
+                policy.Config.from_dict(bad)
+
+
+class TestFinding(unittest.TestCase):
+
+    def test_str_is_path_then_message(self):
+        f = policy.Finding(policy.ERROR, "approval.onTimeout", "must be 'allow' or 'block'")
+        self.assertEqual(str(f), "approval.onTimeout: must be 'allow' or 'block'")
+
+    def test_as_dict_round_trips(self):
+        f = policy.Finding(policy.WARNING, "redactKeys", "empty")
+        self.assertEqual(
+            f.as_dict(),
+            {"severity": "warning", "path": "redactKeys", "message": "empty"},
+        )
+
+    def test_errors_filters_out_warnings(self):
+        cfg = policy.Config.from_dict({"mode": "enfroce", "futureFeature": 1})
+        self.assertEqual(len(cfg.validate()), 2)
+        self.assertEqual([f.path for f in cfg.errors()], ["mode"])
+
+
+class TestRunRefusesBrokenPolicy(unittest.TestCase):
+    """A proxy that boots on a policy it knows is broken is governance theatre."""
+
+    def _run(self, doc, extra=None):
+        from guardianops import cli
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "policy.json"
+            path.write_text(json.dumps(doc))
+            argv = ["run", "--config", str(path)] + (extra or [])
+            # No upstream given, so a policy that passes validation reaches the
+            # "no upstream" error (2) instead of starting a proxy.
+            return cli.main(argv)
+
+    def test_enforce_mode_refuses_to_start_on_an_error(self):
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            code = self._run({"mode": "enforce", "approval": {"onTimeout": "shrug"}})
+        self.assertEqual(code, 2)
+        self.assertIn("refusing to enforce", err.getvalue())
+
+    def test_shadow_mode_warns_but_continues(self):
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self._run({"mode": "shadow", "approval": {"onTimeout": "shrug"}})
+        self.assertIn("continuing because mode is shadow", err.getvalue())
+
+    def test_skip_validation_starts_anyway(self):
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self._run({"mode": "enforce", "approval": {"onTimeout": "shrug"}},
+                      ["--skip-validation"])
+        self.assertNotIn("refusing to enforce", err.getvalue())
+
+    def test_warnings_alone_never_block_startup(self):
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self._run({"mode": "enforce", "futureFeature": True})
+        self.assertNotIn("refusing to enforce", err.getvalue())
+
+    def test_unreadable_config_is_a_clean_message(self):
+        from guardianops import cli
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            code = cli.main(["run", "--config", "/nonexistent/policy.json"])
+        self.assertEqual(code, 2)
+        self.assertIn("no such config", err.getvalue())
+
+
+class TestValidateOutput(unittest.TestCase):
+
+    def _run(self, doc, extra=None):
+        from guardianops import cli
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "policy.json"
+            path.write_text(doc)
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = cli.main(["validate", "--config", str(path)] + (extra or []))
+            return code, out.getvalue(), err.getvalue()
+
+    def test_warnings_alone_exit_zero(self):
+        code, _, _ = self._run('{"futureFeature": true}')
+        self.assertEqual(code, 0)
+
+    def test_strict_turns_warnings_into_failure(self):
+        code, _, _ = self._run('{"futureFeature": true}', ["--strict"])
+        self.assertEqual(code, 1)
+
+    def test_json_output_is_machine_readable(self):
+        code, out, _ = self._run('{"mode": "enfroce", "futureFeature": true}', ["--json"])
+        payload = json.loads(out)
+        self.assertEqual(code, 1)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["errors"], 1)
+        self.assertEqual(payload["warnings"], 1)
+        self.assertEqual(
+            {f["path"] for f in payload["findings"]}, {"mode", "futureFeature"}
+        )
+
+    def test_json_output_on_an_unreadable_file(self):
+        code, out, _ = self._run("{not json", ["--json"])
+        payload = json.loads(out)
+        self.assertEqual(code, 2)
+        self.assertFalse(payload["readable"])
+
+    def test_non_object_policy_exits_two(self):
+        code, _, err = self._run('["not", "a", "policy"]')
+        self.assertEqual(code, 2)
+        self.assertIn("must be a JSON object", err)
+
+
+class TestPackageExports(unittest.TestCase):
+
+    def test_engine_is_importable_from_the_package_root(self):
+        import guardianops
+        cfg = guardianops.Config.from_dict({"mode": guardianops.ENFORCE})
+        verdict = guardianops.evaluate(
+            cfg, "some_tool", novel=False, pin_changed=False, calls_since_approval=0
+        )
+        self.assertIsInstance(verdict, guardianops.Verdict)
+        self.assertEqual(cfg.validate(), [])
+
+    def test_all_names_resolve(self):
+        import guardianops
+        for name in guardianops.__all__:
+            self.assertTrue(hasattr(guardianops, name), name)
 
 
 if __name__ == "__main__":

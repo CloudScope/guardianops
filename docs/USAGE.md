@@ -406,7 +406,95 @@ prompt. Only the pre-inference gate is free.
 guardianops report --audit .guardianops/ledger/     # a directory, or one file
 guardianops verify --audit .guardianops/ledger/
 guardianops pins --show
+guardianops validate --config config.json           # exits 1 on a bad policy
 ```
+
+### Validating a policy before it ships
+
+`guardianops validate` reports every problem in a config at once and exits
+non-zero if any of them are errors, so a policy that does not mean what it says
+fails in CI rather than at the first tool call:
+
+```
+$ guardianops validate --config config.json
+config.json: 1 error(s), 1 warning(s)
+  [warning] toolz: unknown key -- nothing reads this, so the setting has no effect
+  [error] approval.onTimeout: must be 'allow' or 'block', got 'shrug'
+```
+
+**Errors** are policies that cannot mean what they say: an enum outside its
+range, a regex that will not compile, a tier reference nothing will ever match.
+**Warnings** are survivable but usually mistakes.
+
+Exit codes are the CI contract — `0` clean, `1` the policy is wrong, `2` the
+file could not be read at all. Warnings alone do not fail a build unless you
+pass `--strict`. `--json` emits the findings as a machine-readable document:
+
+```bash
+guardianops validate --config config.json --json --strict
+```
+
+#### Unknown keys
+
+The check worth having most is the dullest. A misspelled key is silently
+ignored by the loader, so its whole section keeps its defaults:
+
+```json
+{ "mode": "enforce",
+  "toolz": { "allow": ["read_document"], "deny": ["export_contacts"] } }
+```
+
+That policy parses, enforces, and governs nothing — `tools` never appeared, so
+the allowlist is empty and the denylist is gone. `validate` reports every key
+nothing reads, at every level, including inside individual constraints. These
+are warnings rather than errors so a config written for a newer GuardianOps
+still runs here.
+
+#### The proxy validates too
+
+`guardianops run` validates the policy after applying `--mode` and friends, and
+**refuses to start in enforce mode if there are errors**. In shadow mode it
+warns and continues, since nothing is being enforced to get wrong. `--skip-validation`
+overrides the refusal:
+
+```
+$ guardianops run --config config.json -- python3 -m guardianops.mock_server
+policy /path/to/config.json:
+  [error] approval.onTimeout: must be 'allow' or 'block', got 'shrug'
+error: refusing to enforce a policy with 1 error(s). Fix them, or pass
+--skip-validation to start anyway.
+```
+
+Most enum typos already fail closed — `evaluate()` only downgrades when mode is
+exactly `shadow`, and the approval timeout blocks unless `onTimeout` is exactly
+`allow` — but a setting you thought you configured and did not is worth
+stopping for.
+
+### Using it as a library
+
+The policy engine is exported from the package root:
+
+```python
+from guardianops import Config, evaluate, ENFORCE
+
+cfg = Config.from_dict({"mode": ENFORCE, "tools": {"allow": ["read_doc"]}})
+for finding in cfg.validate():
+    print(finding.severity, finding.path, finding.message)
+
+verdict = evaluate(cfg, "read_doc", novel=False, pin_changed=False,
+                   calls_since_approval=0)
+```
+
+`Config.from_dict()` and `Config.from_json_string()` build a policy without
+touching the filesystem; `Config.validate()` returns `Finding` objects
+(`severity`, `path`, `message`, and `.as_dict()`), and `Config.errors()` filters
+to the ones that make a policy unfit to enforce. A document that is not a JSON
+object raises `TypeError` rather than failing somewhere further in.
+
+With no `source=`, relative state paths (`auditPath`, `baselinePath`,
+`pin.path`) resolve against the working directory. Pass
+`source="/path/to/policy.json"` to anchor them next to that file instead,
+exactly as `Config.load()` does.
 
 ### One ledger per writer
 

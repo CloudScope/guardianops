@@ -5,6 +5,7 @@
     guardianops verify --audit .guardianops/audit.jsonl
     guardianops report --audit .guardianops/audit.jsonl
     guardianops pins   --show
+    guardianops validate --config c.json
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--audit", help="override the audit ledger path")
     run.add_argument("--baseline",
                      help="override the invocation baseline path from the policy")
+    run.add_argument("--skip-validation", action="store_true",
+                     help="start even if the policy has errors (not recommended)")
     run.add_argument("upstream_cmd", nargs=argparse.REMAINDER,
                      help="-- followed by the command that launches a stdio MCP server")
 
@@ -57,15 +60,72 @@ def _build_parser() -> argparse.ArgumentParser:
     pins.add_argument("--path", default=".guardianops/pins.json")
     pins.add_argument("--show", action="store_true")
 
+    val = sub.add_parser("validate", help="check a policy config for errors")
+    val.add_argument("--config", required=True, help="path to a JSON policy config")
+    val.add_argument("--json", action="store_true", dest="as_json",
+                     help="emit findings as JSON for machine consumption")
+    val.add_argument("--strict", action="store_true",
+                     help="treat warnings as errors")
+
     return parser
 
 
+def _load_config(path: str | None) -> policy.Config:
+    """Load a policy, turning every malformed-input failure into a clean message.
+
+    Raises ValueError with text fit for stderr; the alternative is a traceback
+    at startup, which tells an operator nothing about which line to fix.
+    """
+    try:
+        return policy.Config.load(path)
+    except FileNotFoundError:
+        raise ValueError(f"no such config: {path}") from None
+    except IsADirectoryError:
+        raise ValueError(f"not a file: {path}") from None
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path} is not valid JSON: {exc}") from None
+    except TypeError as exc:
+        raise ValueError(f"{path}: {exc}") from None
+    except OSError as exc:
+        raise ValueError(f"cannot read {path}: {exc}") from None
+
+
+def _report(findings: list[policy.Finding], stream) -> None:
+    for finding in findings:
+        stream.write(f"  [{finding.severity}] {finding}\n")
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
-    cfg = policy.Config.load(args.config)
+    try:
+        cfg = _load_config(args.config)
+    except ValueError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 2
+
     if args.mode:
         cfg.mode = args.mode
     if args.audit:
         cfg.audit_path = args.audit
+
+    # Validated after the overrides, so --mode is judged as it will actually
+    # run. A proxy that boots on a policy it knows is broken is governance
+    # theatre: in enforce mode the errors decide what traffic is refused, so
+    # starting anyway is the one failure the operator cannot see.
+    findings = cfg.validate()
+    errors = [f for f in findings if f.severity == policy.ERROR]
+    if findings:
+        sys.stderr.write(f"policy {cfg.source or '<defaults>'}:\n")
+        _report(findings, sys.stderr)
+    if errors and not args.skip_validation:
+        if cfg.mode == policy.ENFORCE:
+            sys.stderr.write(
+                f"error: refusing to enforce a policy with {len(errors)} error(s). "
+                "Fix them, or pass --skip-validation to start anyway.\n"
+            )
+            return 2
+        sys.stderr.write(
+            "warning: policy has errors; continuing because mode is shadow\n"
+        )
 
     argv = [a for a in args.upstream_cmd if a != "--"]
     if args.upstream_url and argv:
@@ -229,6 +289,57 @@ def _cmd_pins(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_validate(args: argparse.Namespace) -> int:
+    """Report every problem in a policy, rather than dying on the first one.
+
+    Exit codes are the contract for CI: 0 clean, 1 the policy is wrong, 2 the
+    file could not be read at all. Warnings alone do not fail a build unless
+    --strict says they should.
+    """
+    try:
+        cfg = _load_config(args.config)
+    except ValueError as exc:
+        if args.as_json:
+            print(json.dumps({"config": args.config, "readable": False,
+                              "error": str(exc)}, indent=2))
+        else:
+            sys.stderr.write(f"error: {exc}\n")
+        return 2
+
+    findings = cfg.validate()
+    errors = [f for f in findings if f.severity == policy.ERROR]
+    warnings = [f for f in findings if f.severity == policy.WARNING]
+    failed = bool(errors) or (bool(warnings) and args.strict)
+
+    if args.as_json:
+        print(json.dumps({
+            "config": args.config,
+            "readable": True,
+            "ok": not failed,
+            "mode": cfg.mode,
+            "errors": len(errors),
+            "warnings": len(warnings),
+            "findings": [f.as_dict() for f in findings],
+        }, indent=2))
+        return 1 if failed else 0
+
+    if not findings:
+        print(f"{args.config}: ok ({cfg.mode} mode, {len(cfg.allow)} tools allowed)")
+        return 0
+
+    counts = ", ".join(
+        f"{n} {label}" for n, label in
+        ((len(errors), "error(s)"), (len(warnings), "warning(s)")) if n
+    )
+    stream = sys.stderr if failed else sys.stdout
+    stream.write(f"{args.config}: {counts}\n")
+    _report(findings, stream)
+    if failed:
+        return 1
+    print(f"{args.config}: ok ({cfg.mode} mode, {len(cfg.allow)} tools allowed)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "run":
@@ -239,4 +350,6 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_report(args)
     if args.command == "pins":
         return _cmd_pins(args)
+    if args.command == "validate":
+        return _cmd_validate(args)
     return 2
