@@ -1,0 +1,1262 @@
+<title>GuardianOps — Runtime Governance for Autonomous AI Agents</title>
+
+<style>
+  :root {
+    --bg:        #EAECEF;
+    --surface:   #F6F7F8;
+    --surface-2: #FFFFFF;
+    --ink:       #14202B;
+    --ink-2:     #4B5966;
+    --ink-3:     #77848F;
+    --line:      #C7CDD4;
+    --line-soft: #DBE0E5;
+    --amber:     #B4740F;
+    --amber-hi:  #D9911F;
+    --amber-wash:#F3E6CE;
+    --allow:     #2C6F5E;
+    --escalate:  #B4740F;
+    --block:     #A33A2C;
+    --allow-wash:#DCEAE4;
+    --block-wash:#F1DDD9;
+
+    --font-display: Charter, "Bitstream Charter", "Iowan Old Style", "Source Serif Pro", Georgia, serif;
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Mono", Consolas, monospace;
+
+    --measure: 68ch;
+    --wide: 1140px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:        #101922;
+      --surface:   #16212C;
+      --surface-2: #1B2836;
+      --ink:       #DFE5EB;
+      --ink-2:     #94A2AE;
+      --ink-3:     #6C7C89;
+      --line:      #2A3D4E;
+      --line-soft: #223343;
+      --amber:     #E0A040;
+      --amber-hi:  #F0B85C;
+      --amber-wash:#33291A;
+      --allow:     #4FA88F;
+      --escalate:  #E0A040;
+      --block:     #D06A57;
+      --allow-wash:#16302B;
+      --block-wash:#33201C;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg:        #101922;
+    --surface:   #16212C;
+    --surface-2: #1B2836;
+    --ink:       #DFE5EB;
+    --ink-2:     #94A2AE;
+    --ink-3:     #6C7C89;
+    --line:      #2A3D4E;
+    --line-soft: #223343;
+    --amber:     #E0A040;
+    --amber-hi:  #F0B85C;
+    --amber-wash:#33291A;
+    --allow:     #4FA88F;
+    --escalate:  #E0A040;
+    --block:     #D06A57;
+    --allow-wash:#16302B;
+    --block-wash:#33201C;
+  }
+
+  :root[data-theme="light"] {
+    --bg:        #EAECEF;
+    --surface:   #F6F7F8;
+    --surface-2: #FFFFFF;
+    --ink:       #14202B;
+    --ink-2:     #4B5966;
+    --ink-3:     #77848F;
+    --line:      #C7CDD4;
+    --line-soft: #DBE0E5;
+    --amber:     #B4740F;
+    --amber-hi:  #D9911F;
+    --amber-wash:#F3E6CE;
+    --allow:     #2C6F5E;
+    --escalate:  #B4740F;
+    --block:     #A33A2C;
+    --allow-wash:#DCEAE4;
+    --block-wash:#F1DDD9;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: var(--wide);
+    margin-inline: auto;
+    padding-inline: 28px;
+  }
+
+  .prose { max-width: var(--measure); }
+
+  /* ---------- masthead ---------- */
+
+  .masthead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+    padding-block: 22px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .wordmark {
+    font-family: var(--font-display);
+    font-size: 22px;
+    letter-spacing: -0.01em;
+    font-weight: 700;
+  }
+  .wordmark span { color: var(--amber); }
+  .masthead-meta {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+
+  /* ---------- hero ---------- */
+
+  .hero { padding-block: 64px 40px; }
+  .hero-kicker {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--amber);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 22px;
+  }
+  .hero-kicker::before {
+    content: "";
+    width: 22px;
+    height: 2px;
+    background: var(--amber);
+    display: inline-block;
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(38px, 5.6vw, 66px);
+    line-height: 1.06;
+    letter-spacing: -0.022em;
+    font-weight: 700;
+    text-wrap: balance;
+    max-width: 17ch;
+    margin-bottom: 26px;
+  }
+  h1 em {
+    font-style: italic;
+    color: var(--amber);
+  }
+  .lede {
+    font-size: 20px;
+    line-height: 1.52;
+    color: var(--ink-2);
+    max-width: 56ch;
+  }
+  .hero-stats {
+    display: flex;
+    gap: 40px;
+    flex-wrap: wrap;
+    margin-top: 40px;
+    padding-top: 26px;
+    border-top: 1px solid var(--line-soft);
+  }
+  .stat-k {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    display: block;
+    margin-bottom: 4px;
+  }
+  .stat-v {
+    font-family: var(--font-display);
+    font-size: 19px;
+    font-weight: 700;
+  }
+
+  /* ---------- sections ---------- */
+
+  .section { padding-block: 58px; border-top: 1px solid var(--line-soft); }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-bottom: 16px;
+  }
+  .eyebrow b { color: var(--amber); font-weight: 400; }
+  h2 {
+    font-family: var(--font-display);
+    font-size: clamp(27px, 3.2vw, 37px);
+    line-height: 1.16;
+    letter-spacing: -0.015em;
+    font-weight: 700;
+    text-wrap: balance;
+    max-width: 24ch;
+    margin-bottom: 22px;
+  }
+  h3 {
+    font-family: var(--font-display);
+    font-size: 20px;
+    line-height: 1.3;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  p { margin-bottom: 18px; }
+  p:last-child { margin-bottom: 0; }
+  strong { font-weight: 600; color: var(--ink); }
+
+  .mono-term {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    color: var(--amber);
+  }
+
+  /* ---------- failure list ---------- */
+
+  .failures {
+    display: grid;
+    gap: 1px;
+    background: var(--line-soft);
+    border: 1px solid var(--line-soft);
+    margin-top: 34px;
+  }
+  @media (min-width: 820px) { .failures { grid-template-columns: repeat(3, 1fr); } }
+  .failure {
+    background: var(--surface);
+    padding: 24px 22px 26px;
+  }
+  .failure-tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--block);
+    margin-bottom: 12px;
+  }
+  .failure p { font-size: 15.5px; color: var(--ink-2); line-height: 1.55; }
+
+  /* ---------- figures ---------- */
+
+  figure {
+    margin-top: 36px;
+    background: var(--surface);
+    border: 1px solid var(--line-soft);
+    padding: 26px 24px 20px;
+  }
+  .fig-scroll { overflow-x: auto; }
+  figure svg {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    color: var(--ink-2);
+  }
+  .fig-scroll svg { min-width: 700px; }
+  figcaption {
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--ink-3);
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line-soft);
+    max-width: 78ch;
+  }
+  figcaption b { color: var(--ink-2); font-weight: 600; }
+
+  .svg-box { fill: var(--surface-2); stroke: var(--line); stroke-width: 1; }
+  .svg-box-key { fill: var(--surface-2); stroke: var(--amber); stroke-width: 1.6; }
+  .svg-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    fill: var(--ink);
+  }
+  .svg-sub {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    fill: var(--ink-3);
+  }
+  .svg-edge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    fill: var(--ink-3);
+  }
+  .svg-line { stroke: currentColor; stroke-width: 1.2; fill: none; }
+  .svg-line-async { stroke: currentColor; stroke-width: 1.2; fill: none; stroke-dasharray: 4 4; opacity: 0.75; }
+  .svg-line-amber { stroke: var(--amber); stroke-width: 1.8; fill: none; }
+
+  /* hero trace */
+  .trace-band { fill: var(--amber-wash); opacity: 0.5; }
+  .trace-normal { stroke: var(--ink-2); stroke-width: 1.6; fill: none; }
+  .trace-drift { stroke: var(--amber); stroke-width: 2.2; fill: none; stroke-linecap: round; }
+  @media (prefers-reduced-motion: no-preference) {
+    .trace-normal { stroke-dasharray: 480; stroke-dashoffset: 480; animation: draw 1.5s ease-out 0.2s forwards; }
+    .trace-drift  { stroke-dasharray: 260; stroke-dashoffset: 260; animation: draw 1.1s ease-out 1.5s forwards; }
+    .trace-flag   { opacity: 0; animation: fade 0.5s ease-out 2.5s forwards; }
+  }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  @keyframes fade { to { opacity: 1; } }
+
+  /* ---------- drift signature table ---------- */
+
+  .table-scroll { overflow-x: auto; margin-top: 34px; border: 1px solid var(--line-soft); }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; background: var(--surface); }
+  th, td { text-align: left; padding: 14px 18px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  thead th {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 400;
+    background: var(--surface-2);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.sig { font-family: var(--font-display); font-weight: 700; white-space: nowrap; }
+  td.detects { color: var(--ink-2); font-size: 15.5px; }
+  td.weight { font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums; color: var(--amber); white-space: nowrap; }
+
+  /* ---------- feature grid ---------- */
+
+  .features {
+    display: grid;
+    gap: 1px;
+    background: var(--line-soft);
+    border: 1px solid var(--line-soft);
+    margin-top: 34px;
+  }
+  @media (min-width: 700px) { .features { grid-template-columns: repeat(2, 1fr); } }
+  @media (min-width: 1000px) { .features { grid-template-columns: repeat(3, 1fr); } }
+  .feature { background: var(--surface); padding: 26px 22px 28px; }
+  .feature-n {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--amber);
+    letter-spacing: 0.08em;
+    display: block;
+    margin-bottom: 14px;
+  }
+  .feature p { font-size: 15.5px; line-height: 1.55; color: var(--ink-2); }
+
+  /* ---------- console mock ---------- */
+
+  .console {
+    margin-top: 34px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    font-family: var(--font-mono);
+    overflow: hidden;
+  }
+  .console-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 11px 16px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .console-bar .live { color: var(--allow); display: flex; align-items: center; gap: 7px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; flex: none; }
+  .console-bar .spacer { flex: 1; }
+
+  .console-grid { display: grid; grid-template-columns: 1fr; }
+  @media (min-width: 960px) { .console-grid { grid-template-columns: 232px 1fr 300px; } }
+  .pane { padding: 14px 16px 18px; border-top: 1px solid var(--line-soft); }
+  @media (min-width: 960px) {
+    .pane { border-top: none; border-right: 1px solid var(--line-soft); }
+    .pane:last-child { border-right: none; }
+  }
+  .pane-title {
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-bottom: 14px;
+  }
+
+  .tree { font-size: 12px; line-height: 1.5; }
+  .tree-node { display: flex; gap: 8px; align-items: baseline; padding: 5px 6px; border-radius: 2px; }
+  .tree-node.child { padding-left: 18px; color: var(--ink-2); }
+  .tree-node.active { background: var(--amber-wash); color: var(--ink); }
+  .tree-node:hover { background: var(--line-soft); }
+  .tree-id { color: var(--ink-3); font-size: 11px; }
+
+  .stream-row {
+    display: grid;
+    grid-template-columns: 62px 1fr 52px;
+    gap: 12px;
+    align-items: center;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: 12px;
+  }
+  .stream-row:last-of-type { border-bottom: none; }
+  .ts { color: var(--ink-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .bar-track { height: 8px; background: var(--line-soft); position: relative; }
+  .bar-fill { position: absolute; inset-block: 0; left: 0; background: var(--ink-3); }
+  .bar-fill.warn { background: var(--escalate); }
+  .bar-fill.crit { background: var(--block); }
+  .score { text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  .score.warn { color: var(--escalate); }
+  .score.crit { color: var(--block); font-weight: 600; }
+  .stream-label { font-size: 11.5px; color: var(--ink-2); margin-bottom: 5px; }
+
+  .matrix { display: grid; grid-template-columns: 92px repeat(5, 1fr); gap: 3px; font-size: 10px; }
+  .matrix-head { color: var(--ink-3); font-size: 9.5px; text-align: center; padding-bottom: 4px; }
+  .matrix-row-label { color: var(--ink-2); font-size: 10.5px; display: flex; align-items: center; }
+  .cell {
+    aspect-ratio: 1;
+    background: var(--line-soft);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+  }
+  .cell:hover { outline: 1px solid var(--amber); }
+  .cell.warn { background: var(--amber-wash); color: var(--escalate); }
+  .cell.crit { background: var(--block-wash); color: var(--block); font-weight: 700; outline: 1px solid var(--block); }
+  .cell.ok { background: var(--allow-wash); color: var(--allow); }
+
+  .hitl { margin-top: 18px; border: 1px solid var(--block); background: var(--surface-2); }
+  .hitl-head {
+    background: var(--block-wash);
+    color: var(--block);
+    padding: 8px 12px;
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .hitl-body { padding: 12px; font-size: 11.5px; line-height: 1.5; }
+  .diff { margin: 10px 0; }
+  .diff div { padding: 3px 8px; white-space: pre-wrap; word-break: break-word; }
+  .diff .del { background: var(--block-wash); color: var(--block); }
+  .diff .add { background: var(--amber-wash); color: var(--amber); }
+  .hitl-meta { color: var(--ink-3); font-size: 10.5px; margin-bottom: 8px; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+  .btn {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    padding: 7px 11px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+  .btn:hover { border-color: var(--ink-3); color: var(--ink); }
+  .btn-danger { border-color: var(--block); color: var(--block); }
+  .btn-danger:hover { background: var(--block-wash); color: var(--block); }
+  .btn-primary { border-color: var(--amber); color: var(--amber); }
+  .btn-primary:hover { background: var(--amber-wash); }
+  .btn:focus-visible, .cell:focus-visible, .tree-node:focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: 2px;
+  }
+
+  /* ---------- capability clusters ---------- */
+
+  .clusters {
+    display: grid;
+    gap: 34px 44px;
+    margin-top: 34px;
+  }
+  @media (min-width: 760px) { .clusters { grid-template-columns: repeat(2, 1fr); } }
+  @media (min-width: 1060px) { .clusters { grid-template-columns: repeat(3, 1fr); } }
+  .cluster-title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--amber);
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 14px;
+  }
+  .cluster ul { list-style: none; display: flex; flex-direction: column; gap: 9px; }
+  .cluster li {
+    font-size: 14.5px;
+    line-height: 1.45;
+    color: var(--ink-2);
+    padding-left: 16px;
+    position: relative;
+  }
+  .cluster li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.62em;
+    width: 6px;
+    height: 1px;
+    background: var(--ink-3);
+  }
+
+  /* ---------- pillars ---------- */
+
+  .pillars { margin-top: 34px; display: flex; flex-direction: column; gap: 1px; background: var(--line-soft); border: 1px solid var(--line-soft); }
+  .pillar {
+    background: var(--surface);
+    padding: 22px 24px;
+    display: grid;
+    gap: 6px 24px;
+    align-items: baseline;
+  }
+  @media (min-width: 780px) { .pillar { grid-template-columns: 44px 1fr; } }
+  .pillar-n {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--amber);
+    font-variant-numeric: tabular-nums;
+  }
+  .pillar-t { font-family: var(--font-display); font-size: 18.5px; font-weight: 700; line-height: 1.35; }
+
+  /* ---------- closing ---------- */
+
+  .vision { padding-block: 66px 20px; border-top: 1px solid var(--line-soft); }
+  .vision blockquote {
+    font-family: var(--font-display);
+    font-size: clamp(23px, 3vw, 32px);
+    line-height: 1.32;
+    letter-spacing: -0.012em;
+    max-width: 26ch;
+    text-wrap: balance;
+    border-left: 2px solid var(--amber);
+    padding-left: 26px;
+    margin-bottom: 30px;
+  }
+  .colophon {
+    padding-block: 30px 56px;
+    border-top: 1px solid var(--line-soft);
+    margin-top: 40px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="wordmark">Guardian<span>Ops</span></div>
+    <div class="masthead-meta">
+      <span>Runtime Governance Layer</span>
+      <span>MCP · A2A · Agent Runtimes</span>
+      <span>v0.1 Concept Brief</span>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="hero-kicker">Behavioral drift intelligence</div>
+    <h1>Agents don't fail at the prompt. They drift <em>mid-execution</em>.</h1>
+    <p class="lede">
+      GuardianOps is a real-time runtime governance and behavioral drift detection platform for
+      autonomous AI agents and Model Context Protocol ecosystems — supervising what an agent
+      actually does, step by step, instead of what it was told to do.
+    </p>
+
+    <figure class="fig-scroll">
+      <svg viewBox="0 0 720 210" role="img" aria-label="An agent's behavior trace stays inside a baseline envelope for most of a run, then departs upward; GuardianOps intercepts at the moment of departure and the composite risk score rises from 0.19 to 0.87.">
+        <defs>
+          <marker id="tip-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
+          </marker>
+        </defs>
+
+        <rect class="trace-band" x="40" y="78" width="640" height="40" />
+        <line x1="40" y1="78" x2="680" y2="78" stroke="currentColor" stroke-width="0.8" stroke-dasharray="3 4" opacity="0.6" />
+        <line x1="40" y1="118" x2="680" y2="118" stroke="currentColor" stroke-width="0.8" stroke-dasharray="3 4" opacity="0.6" />
+        <text class="svg-edge" x="40" y="70">baseline envelope · learned from 4,200 prior runs</text>
+
+        <polyline class="trace-normal" points="40,100 70,94 100,104 130,96 160,101 190,92 220,106 250,97 280,103 310,93 340,105 370,99 400,95 430,104 460,98 480,101" />
+        <polyline class="trace-drift" points="480,101 505,88 525,74 545,60 570,66 595,46 620,34 645,26 668,21" />
+        <circle cx="668" cy="21" r="4" fill="var(--amber)" />
+
+        <g class="trace-flag">
+          <line x1="545" y1="18" x2="545" y2="176" stroke="var(--amber)" stroke-width="1" stroke-dasharray="4 4" />
+          <text class="svg-edge" x="551" y="150" fill="var(--amber)">envelope exit · t+00:41</text>
+          <text class="svg-edge" x="551" y="164" fill="var(--amber)">action held for human approval</text>
+        </g>
+
+        <line class="svg-line" x1="40" y1="176" x2="700" y2="176" marker-end="url(#tip-a)" />
+        <text class="svg-edge" x="40" y="196">multi-step autonomous execution loop</text>
+
+        <text class="svg-sub" x="40" y="36">composite runtime risk</text>
+        <text class="svg-label" x="40" y="20" font-size="15">0.19</text>
+        <text class="svg-label" x="600" y="20" font-size="15" fill="var(--amber)">0.87</text>
+        <text class="svg-sub" x="600" y="36" fill="var(--amber)">escalated</text>
+      </svg>
+      <figcaption>
+        <b>The governed unit is the run, not the message.</b> A tool-call sequence that looks
+        individually benign — read a config, list credentials, widen a role — reads as a single
+        continuous departure from the agent's own baseline. GuardianOps scores that trajectory
+        while the loop is still running.
+      </figcaption>
+    </figure>
+
+    <div class="hero-stats">
+      <div>
+        <span class="stat-k">Sits</span>
+        <span class="stat-v">Inline at the AI gateway</span>
+      </div>
+      <div>
+        <span class="stat-k">Governs</span>
+        <span class="stat-v">Tool calls, MCP servers, infra</span>
+      </div>
+      <div>
+        <span class="stat-k">Decides</span>
+        <span class="stat-v">Allow · Escalate · Block</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow"><b>01</b> &nbsp;The problem</div>
+    <div class="prose">
+      <h2>Static guardrails were built for text. Agents now execute.</h2>
+      <p>
+        Autonomous agents are operating as DevOps engineers, workflow orchestrators and enterprise
+        copilots. They are no longer generating text — they are running code, reaching into
+        databases, and calling external tools across MCP ecosystems.
+      </p>
+      <p>
+        The safety stack most organizations deployed assumes a single request and a single
+        response. That assumption breaks the moment an agent gets a loop and a toolbelt.
+      </p>
+    </div>
+
+    <div class="failures">
+      <div class="failure">
+        <div class="failure-tag">Cannot predict</div>
+        <h3>Prompt engineering ends at step one</h3>
+        <p>
+          Static guardrails constrain the opening instruction. They say nothing about the
+          fortieth step of an autonomous loop, where the agent is acting on state it generated
+          itself.
+        </p>
+      </div>
+      <div class="failure">
+        <div class="failure-tag">Cannot see</div>
+        <h3>Content filters don't read intent</h3>
+        <p>
+          A filter scanning for unsafe language will pass a perfectly polite command that drops a
+          production table, or an agent quietly widening its own IAM role between two harmless
+          retrievals.
+        </p>
+      </div>
+      <div class="failure">
+        <div class="failure-tag">Cannot govern</div>
+        <h3>The visibility gap opens at the tool call</h3>
+        <p>
+          Once the agent starts invoking tools, organizations lose the ability to monitor, score
+          and govern runtime decisions. Logs arrive after the fact — long after the action landed.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow"><b>02</b> &nbsp;The solution</div>
+    <div class="prose">
+      <h2>Monitor the system's behavior, not just the model's output.</h2>
+      <p>
+        ML observability platforms learned to detect <span class="mono-term">data drift</span> —
+        the moment production inputs stop resembling training inputs. GuardianOps applies the same
+        instinct one layer up: it watches the <strong>behavior of the autonomous system
+        itself</strong>.
+      </p>
+      <p>
+        It sits as a transparent interceptor between agents, MCP servers and enterprise
+        infrastructure. Every prompt, tool call and execution trace passes through a
+        multi-dimensional drift engine, is scored, and is governed — allowed, blocked, or held for
+        human approval — before it reaches anything real.
+      </p>
+    </div>
+
+    <figure class="fig-scroll">
+      <svg viewBox="0 0 900 490" role="img" aria-label="Topology: Planner, Executor and Retriever agents send RPC and SSE tool calls into the GuardianOps gateway, which evaluates policy, drift and risk, then routes each action to infrastructure, MCP servers, human approval, or a block. The full telemetry tree is mirrored asynchronously to drift training, session replay and an immutable audit ledger.">
+        <defs>
+          <marker id="tip-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
+          </marker>
+          <marker id="tip-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--amber)" />
+          </marker>
+        </defs>
+
+        <text class="svg-sub" x="20" y="22">AGENT RUNTIME</text>
+        <rect class="svg-box" x="20" y="92" width="168" height="52" />
+        <text class="svg-label" x="34" y="114">Planner</text>
+        <text class="svg-sub" x="34" y="131">decomposes objective</text>
+
+        <rect class="svg-box" x="20" y="172" width="168" height="52" />
+        <text class="svg-label" x="34" y="194">Executor</text>
+        <text class="svg-sub" x="34" y="211">runs code · calls tools</text>
+
+        <rect class="svg-box" x="20" y="252" width="168" height="52" />
+        <text class="svg-label" x="34" y="274">Retriever</text>
+        <text class="svg-sub" x="34" y="291">fetches context</text>
+
+        <line class="svg-line" x1="188" y1="118" x2="292" y2="130" marker-end="url(#tip-b)" />
+        <line class="svg-line" x1="188" y1="198" x2="292" y2="198" marker-end="url(#tip-b)" />
+        <line class="svg-line" x1="188" y1="278" x2="292" y2="266" marker-end="url(#tip-b)" />
+        <text class="svg-edge" x="196" y="190">RPC / SSE transport</text>
+
+        <rect class="svg-box-key" x="296" y="52" width="234" height="292" />
+        <text class="svg-label" x="312" y="78" fill="var(--amber)">GuardianOps Gateway</text>
+        <text class="svg-sub" x="312" y="95">inline · sub-millisecond decision</text>
+        <line x1="296" y1="108" x2="530" y2="108" stroke="var(--amber)" stroke-width="0.8" opacity="0.5" />
+
+        <rect class="svg-box" x="314" y="124" width="198" height="44" />
+        <text class="svg-label" x="326" y="145" font-size="11.5">A2A policy matrix</text>
+        <text class="svg-sub" x="326" y="160">agent RBAC · entitlements</text>
+
+        <rect class="svg-box" x="314" y="180" width="198" height="44" />
+        <text class="svg-label" x="326" y="201" font-size="11.5">Behavioral drift engine</text>
+        <text class="svg-sub" x="326" y="216">5 drift signatures scored</text>
+
+        <rect class="svg-box" x="314" y="236" width="198" height="44" />
+        <text class="svg-label" x="326" y="257" font-size="11.5">Composite risk score</text>
+        <text class="svg-sub" x="326" y="272">weighted · run-relative</text>
+
+        <rect class="svg-box" x="314" y="292" width="198" height="36" />
+        <text class="svg-label" x="326" y="315" font-size="11.5">Decision · allow / hold / block</text>
+
+        <line class="svg-line" x1="530" y1="112" x2="676" y2="112" marker-end="url(#tip-b)" />
+        <text class="svg-edge" x="546" y="104">allow · signed action</text>
+        <rect class="svg-box" x="680" y="88" width="196" height="48" />
+        <text class="svg-label" x="694" y="110">Enterprise infrastructure</text>
+        <text class="svg-sub" x="694" y="126">databases · CI/CD · cloud APIs</text>
+
+        <line class="svg-line" x1="530" y1="182" x2="676" y2="182" marker-end="url(#tip-b)" />
+        <text class="svg-edge" x="546" y="174">allow · scoped entitlement</text>
+        <rect class="svg-box" x="680" y="158" width="196" height="48" />
+        <text class="svg-label" x="694" y="180">MCP servers</text>
+        <text class="svg-sub" x="694" y="196">trust-validated · sandboxed</text>
+
+        <line class="svg-line-amber" x1="530" y1="252" x2="676" y2="252" marker-end="url(#tip-amber)" />
+        <text class="svg-edge" x="546" y="244" fill="var(--amber)">escalate · action held</text>
+        <rect class="svg-box" x="680" y="228" width="196" height="48" stroke="var(--amber)" />
+        <text class="svg-label" x="694" y="250" fill="var(--amber)">Human approval</text>
+        <text class="svg-sub" x="694" y="266">HITL intercept panel</text>
+
+        <line x1="530" y1="316" x2="640" y2="316" stroke="var(--block)" stroke-width="1.4" />
+        <line x1="644" y1="304" x2="644" y2="328" stroke="var(--block)" stroke-width="2.4" />
+        <line x1="636" y1="308" x2="652" y2="324" stroke="var(--block)" stroke-width="2.4" />
+        <text class="svg-edge" x="546" y="308" fill="var(--block)">block · never reaches infra</text>
+        <text class="svg-sub" x="662" y="321" fill="var(--block)">terminated</text>
+
+        <line class="svg-line-async" x1="413" y1="344" x2="413" y2="386" marker-end="url(#tip-b)" />
+        <line class="svg-line-async" x1="150" y1="386" x2="800" y2="386" />
+        <text class="svg-edge" x="424" y="378">full telemetry tree · mirrored, non-blocking</text>
+
+        <line class="svg-line-async" x1="220" y1="386" x2="220" y2="410" marker-end="url(#tip-b)" />
+        <line class="svg-line-async" x1="450" y1="386" x2="450" y2="410" marker-end="url(#tip-b)" />
+        <line class="svg-line-async" x1="700" y1="386" x2="700" y2="410" marker-end="url(#tip-b)" />
+
+        <rect class="svg-box" x="128" y="414" width="184" height="46" />
+        <text class="svg-label" x="142" y="435" font-size="11.5">Drift model training</text>
+        <text class="svg-sub" x="142" y="451">vector baselines per agent</text>
+
+        <rect class="svg-box" x="358" y="414" width="184" height="46" />
+        <text class="svg-label" x="372" y="435" font-size="11.5">Session replay</text>
+        <text class="svg-sub" x="372" y="451">step-by-step reconstruction</text>
+
+        <rect class="svg-box" x="608" y="414" width="184" height="46" />
+        <text class="svg-label" x="622" y="435" font-size="11.5">Immutable audit ledger</text>
+        <text class="svg-sub" x="622" y="451">SOC 2 · GDPR · HIPAA · ISO</text>
+
+        <line x1="20" y1="478" x2="44" y2="478" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 4" />
+        <text class="svg-edge" x="50" y="482">dashed = asynchronous mirror, off the critical path</text>
+      </svg>
+      <figcaption>
+        <b>Decoupled intelligence processing.</b> The gateway makes microsecond allow/block calls
+        from local policy and cached baselines, so governance never becomes the latency budget.
+        Everything else — replay, audit, drift retraining — runs off a mirrored telemetry bus.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow"><b>03</b> &nbsp;The layered governance engine</div>
+    <div class="prose">
+      <h2>Four stages between an agent's intent and a real-world side effect.</h2>
+      <p>
+        Every action crosses the same pipeline. The stages are ordered because each one needs the
+        previous one's output: you cannot score what you have not analyzed, and you cannot govern
+        what you have not scored.
+      </p>
+    </div>
+
+    <figure class="fig-scroll">
+      <svg viewBox="0 0 880 268" role="img" aria-label="Pipeline: Observe, then Analyze, then Score, then Govern. The Govern stage fans out to three outcomes — allow, escalate to a human, or block.">
+        <defs>
+          <marker id="tip-c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
+          </marker>
+        </defs>
+
+        <rect class="svg-box" x="16" y="28" width="188" height="92" />
+        <text class="svg-sub" x="32" y="52" fill="var(--amber)">01</text>
+        <text class="svg-label" x="32" y="76" font-size="14">Observe</text>
+        <text class="svg-sub" x="32" y="96">prompts, tool calls,</text>
+        <text class="svg-sub" x="32" y="110">execution traces</text>
+
+        <rect class="svg-box" x="232" y="28" width="188" height="92" />
+        <text class="svg-sub" x="248" y="52" fill="var(--amber)">02</text>
+        <text class="svg-label" x="248" y="76" font-size="14">Analyze</text>
+        <text class="svg-sub" x="248" y="96">compare against the</text>
+        <text class="svg-sub" x="248" y="110">agent's own baseline</text>
+
+        <rect class="svg-box" x="448" y="28" width="188" height="92" />
+        <text class="svg-sub" x="464" y="52" fill="var(--amber)">03</text>
+        <text class="svg-label" x="464" y="76" font-size="14">Score</text>
+        <text class="svg-sub" x="464" y="96">weight 5 drift signatures</text>
+        <text class="svg-sub" x="464" y="110">into one risk value</text>
+
+        <rect class="svg-box-key" x="664" y="28" width="188" height="92" />
+        <text class="svg-sub" x="680" y="52" fill="var(--amber)">04</text>
+        <text class="svg-label" x="680" y="76" font-size="14">Govern</text>
+        <text class="svg-sub" x="680" y="96">apply policy-as-code</text>
+        <text class="svg-sub" x="680" y="110">thresholds</text>
+
+        <line class="svg-line" x1="204" y1="74" x2="228" y2="74" marker-end="url(#tip-c)" />
+        <line class="svg-line" x1="420" y1="74" x2="444" y2="74" marker-end="url(#tip-c)" />
+        <line class="svg-line" x1="636" y1="74" x2="660" y2="74" marker-end="url(#tip-c)" />
+
+        <line class="svg-line" x1="758" y1="120" x2="290" y2="186" marker-end="url(#tip-c)" />
+        <line class="svg-line" x1="758" y1="120" x2="524" y2="186" marker-end="url(#tip-c)" />
+        <line class="svg-line" x1="758" y1="120" x2="758" y2="186" marker-end="url(#tip-c)" />
+
+        <rect x="176" y="192" width="196" height="40" fill="var(--allow-wash)" stroke="var(--allow)" stroke-width="1" />
+        <text class="svg-label" x="192" y="210" font-size="11.5" fill="var(--allow)">Allow</text>
+        <text class="svg-sub" x="192" y="225" fill="var(--allow)">risk under threshold</text>
+
+        <rect x="410" y="192" width="196" height="40" fill="var(--amber-wash)" stroke="var(--amber)" stroke-width="1" />
+        <text class="svg-label" x="426" y="210" font-size="11.5" fill="var(--amber)">Escalate</text>
+        <text class="svg-sub" x="426" y="225" fill="var(--amber)">held for human verification</text>
+
+        <rect x="644" y="192" width="196" height="40" fill="var(--block-wash)" stroke="var(--block)" stroke-width="1" />
+        <text class="svg-label" x="660" y="210" font-size="11.5" fill="var(--block)">Block</text>
+        <text class="svg-sub" x="660" y="225" fill="var(--block)">action terminated, run flagged</text>
+
+        <text class="svg-edge" x="16" y="256">thresholds are programmable per agent, per tool, per tenant</text>
+      </svg>
+      <figcaption>
+        <b>The same pipeline, different thresholds.</b> A research agent reading public docs and a
+        deployment agent holding production credentials run identical logic — what differs is the
+        policy bundle that decides where <span class="mono-term">allow</span> ends and
+        <span class="mono-term">escalate</span> begins.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow"><b>04</b> &nbsp;Drift signatures</div>
+    <div class="prose">
+      <h2>Five dimensions an agent can deviate along.</h2>
+      <p>
+        Each signature is scored independently, then weighted into the composite. Separating them
+        matters operationally: an operator responds very differently to an agent wandering off
+        objective than to one talking to a compromised MCP server.
+      </p>
+    </div>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Signature</th>
+            <th scope="col">What it detects</th>
+            <th scope="col">Typical trigger</th>
+            <th scope="col">Weight</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="sig">Context drift</td>
+            <td class="detects">Divergence between the agent's current activity and its originally stated objective.</td>
+            <td class="detects">A migration task that begins reading unrelated customer tables.</td>
+            <td class="weight">0.20</td>
+          </tr>
+          <tr>
+            <td class="sig">Tool drift</td>
+            <td class="detects">Tool-invocation patterns that depart from the agent's learned usage distribution.</td>
+            <td class="detects">Call volume spike, or a tool never used in 4,200 prior runs.</td>
+            <td class="weight">0.20</td>
+          </tr>
+          <tr>
+            <td class="sig">Privilege drift</td>
+            <td class="detects">Self-escalation — the agent acquiring or exercising permissions beyond its grant.</td>
+            <td class="detects">Role widening, credential reads, scope expansion mid-run.</td>
+            <td class="weight">0.25</td>
+          </tr>
+          <tr>
+            <td class="sig">Autonomy drift</td>
+            <td class="detects">Rising independence: longer unattended chains, fewer checkpoints, self-issued goals.</td>
+            <td class="detects">Sub-agent spawning, or a loop extending past its planned depth.</td>
+            <td class="weight">0.15</td>
+          </tr>
+          <tr>
+            <td class="sig">MCP trust drift</td>
+            <td class="detects">Degrading integrity of external MCP servers and the data tools behind them.</td>
+            <td class="detects">Changed tool schema, unsigned server, anomalous response shape.</td>
+            <td class="weight">0.20</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow"><b>05</b> &nbsp;Operational command center</div>
+    <div class="prose">
+      <h2>Hundreds of non-deterministic runs, one screen.</h2>
+      <p>
+        Security operators cannot supervise autonomous fleets through raw text consoles. The
+        console is a high-density SIEM surface built for one job: making the run that needs
+        attention impossible to miss, and making the decision one keystroke away.
+      </p>
+    </div>
+
+    <div class="console">
+      <div class="console-bar">
+        <span class="live"><span class="dot"></span>Live</span>
+        <span>412 active runs</span>
+        <span>1 held</span>
+        <span class="spacer"></span>
+        <span>tenant: acme-platform</span>
+      </div>
+
+      <div class="console-grid">
+
+        <div class="pane">
+          <div class="pane-title">Active execution sessions</div>
+          <div class="tree">
+            <div class="tree-node" tabindex="0"><span class="dot" style="color:var(--allow)"></span>deploy-orchestrator <span class="tree-id">×12</span></div>
+            <div class="tree-node child" tabindex="0">run/8f21 · planner</div>
+            <div class="tree-node child" tabindex="0">run/8f21 · executor</div>
+            <div class="tree-node" tabindex="0"><span class="dot" style="color:var(--allow)"></span>data-migration <span class="tree-id">×7</span></div>
+            <div class="tree-node child" tabindex="0">run/b904 · retriever</div>
+            <div class="tree-node active" tabindex="0"><span class="dot" style="color:var(--block)"></span>infra-copilot <span class="tree-id">×3</span></div>
+            <div class="tree-node child" tabindex="0">run/c17d · planner</div>
+            <div class="tree-node child active" tabindex="0">run/c17d · executor ⚑</div>
+            <div class="tree-node child" tabindex="0">run/c17d · mcp/aws-cli</div>
+            <div class="tree-node" tabindex="0"><span class="dot" style="color:var(--allow)"></span>support-triage <span class="tree-id">×31</span></div>
+            <div class="tree-node" tabindex="0"><span class="dot" style="color:var(--escalate)"></span>report-builder <span class="tree-id">×5</span></div>
+          </div>
+        </div>
+
+        <div class="pane">
+          <div class="pane-title">Behavioral telemetry stream · run/c17d</div>
+
+          <div class="stream-label">Tool-call volume vs. baseline</div>
+          <div class="stream-row">
+            <span class="ts">t+00:12</span>
+            <span class="bar-track"><span class="bar-fill" style="width:22%"></span></span>
+            <span class="score">0.14</span>
+          </div>
+          <div class="stream-row">
+            <span class="ts">t+00:26</span>
+            <span class="bar-track"><span class="bar-fill" style="width:31%"></span></span>
+            <span class="score">0.19</span>
+          </div>
+          <div class="stream-row">
+            <span class="ts">t+00:38</span>
+            <span class="bar-track"><span class="bar-fill warn" style="width:58%"></span></span>
+            <span class="score warn">0.46</span>
+          </div>
+          <div class="stream-row">
+            <span class="ts">t+00:41</span>
+            <span class="bar-track"><span class="bar-fill crit" style="width:87%"></span></span>
+            <span class="score crit">0.87</span>
+          </div>
+
+          <div class="stream-label" style="margin-top:16px">Recent execution events</div>
+          <div class="stream-row" style="grid-template-columns:62px 1fr auto">
+            <span class="ts">t+00:38</span>
+            <span style="font-size:11.5px;color:var(--ink-2)">mcp/aws-cli → iam:ListAccessKeys</span>
+            <span class="score warn">held</span>
+          </div>
+          <div class="stream-row" style="grid-template-columns:62px 1fr auto">
+            <span class="ts">t+00:41</span>
+            <span style="font-size:11.5px;color:var(--ink-2)">mcp/aws-cli → iam:AttachRolePolicy</span>
+            <span class="score crit">intercept</span>
+          </div>
+        </div>
+
+        <div class="pane">
+          <div class="pane-title">Behavior threat matrix</div>
+          <div class="matrix">
+            <span></span>
+            <span class="matrix-head">12</span>
+            <span class="matrix-head">26</span>
+            <span class="matrix-head">33</span>
+            <span class="matrix-head">38</span>
+            <span class="matrix-head">41</span>
+
+            <span class="matrix-row-label">Context</span>
+            <span class="cell ok" tabindex="0">·</span>
+            <span class="cell ok" tabindex="0">·</span>
+            <span class="cell" tabindex="0">·</span>
+            <span class="cell warn" tabindex="0">2</span>
+            <span class="cell warn" tabindex="0">3</span>
+
+            <span class="matrix-row-label">Tool</span>
+            <span class="cell ok" tabindex="0">·</span>
+            <span class="cell" tabindex="0">·</span>
+            <span class="cell warn" tabindex="0">1</span>
+            <span class="cell warn" tabindex="0">4</span>
+            <span class="cell crit" tabindex="0">6</span>
+
+            <span class="matrix-row-label">Privilege</span>
+            <span class="cell ok" tabindex="0">·</span>
+            <span class="cell ok" tabindex="0">·</span>
+            <span class="cell" tabindex="0">·</span>
+            <span class="cell crit" tabindex="0">5</span>
+            <span class="cell crit" tabindex="0">9</span>
+
+            <span class="matrix-row-label">Autonomy</span>
+            <span class="cell ok" tabindex="0">·</span>
+            <span class="cell" tabindex="0">·</span>
+            <span class="cell" tabindex="0">·</span>
+            <span class="cell warn" tabindex="0">2</span>
+            <span class="cell warn" tabindex="0">4</span>
+
+            <span class="matrix-row-label">MCP trust</span>
+            <span class="cell ok" tabindex="0">·</span>
+            <span class="cell ok" tabindex="0">·</span>
+            <span class="cell ok" tabindex="0">·</span>
+            <span class="cell" tabindex="0">·</span>
+            <span class="cell warn" tabindex="0">1</span>
+          </div>
+
+          <div class="hitl">
+            <div class="hitl-head">
+              <span>Human-in-the-loop intercept</span>
+              <span>0.87</span>
+            </div>
+            <div class="hitl-body">
+              <div class="hitl-meta">run/c17d · executor · privilege drift · held 00:04 ago</div>
+              <div>Agent objective diverged from granted scope:</div>
+              <div class="diff">
+                <div class="del">− granted: iam:Get*, iam:List* on role/agent-runner</div>
+                <div class="add">+ attempted: iam:AttachRolePolicy → AdministratorAccess</div>
+              </div>
+              <div style="color:var(--ink-3)">No prior run of this agent has invoked this tool.</div>
+              <div class="actions">
+                <button class="btn btn-danger" type="button">Kill container</button>
+                <button class="btn" type="button">Approve once</button>
+                <button class="btn btn-primary" type="button">Whitelist path</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <p style="font-size:14px;color:var(--ink-3);margin-top:16px;max-width:78ch">
+      Left: every active multi-agent run loop in the ecosystem. Center: live telemetry against
+      learned baselines, where deviation elevates the row's status. Right: the drift matrix — one
+      click on any cell opens the intercept panel with the raw prompt difference and the three
+      decisions an operator can make.
+    </p>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow"><b>06</b> &nbsp;Key features</div>
+    <h2>What ships in the platform.</h2>
+
+    <div class="features">
+      <div class="feature">
+        <span class="feature-n">RUNTIME</span>
+        <h3>Governance layer</h3>
+        <p>A low-latency interception engine giving real-time visibility and control over agent execution loops, inline at the AI gateway.</p>
+      </div>
+      <div class="feature">
+        <span class="feature-n">DETECTION</span>
+        <h3>Behavioral drift engine</h3>
+        <p>Risk-scoring models that classify subtle deviations in agent reasoning, autonomy level and tool-usage patterns against learned baselines.</p>
+      </div>
+      <div class="feature">
+        <span class="feature-n">POLICY</span>
+        <h3>Dynamic policy-as-code</h3>
+        <p>Granular, programmable boundaries defining exactly what each agent may execute — versioned, testable, and deployed like any other code.</p>
+      </div>
+      <div class="feature">
+        <span class="feature-n">MCP</span>
+        <h3>Trust framework</h3>
+        <p>Monitoring built specifically for Model Context Protocol ecosystems, validating the integrity of external data tools and the servers behind them.</p>
+      </div>
+      <div class="feature">
+        <span class="feature-n">HITL</span>
+        <h3>Adaptive human-in-the-loop</h3>
+        <p>Smart escalation that intercepts high-risk or high-drift actions and requests human verification before execution, not after.</p>
+      </div>
+      <div class="feature">
+        <span class="feature-n">FORENSICS</span>
+        <h3>Replayable audit trail</h3>
+        <p>Immutable, step-by-step reconstruction of any run — prompt, tool call and response lineage preserved for compliance and investigation.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow"><b>07</b> &nbsp;Capabilities</div>
+    <h2>What an enterprise gets on day one.</h2>
+
+    <div class="clusters">
+      <div class="cluster">
+        <div class="cluster-title">Traceability &amp; replay</div>
+        <ul>
+          <li>Complete end-to-end agent traceability</li>
+          <li>Distributed tracing for every execution step</li>
+          <li>Prompt, tool and response lineage tracking</li>
+          <li>Replayable sessions and execution history</li>
+          <li>Faster debugging and incident resolution</li>
+          <li>Developer productivity through trace replay</li>
+        </ul>
+      </div>
+      <div class="cluster">
+        <div class="cluster-title">Access &amp; entitlement</div>
+        <ul>
+          <li>Full MCP access governance and entitlement enforcement</li>
+          <li>Zero-trust security architecture for AI runtimes</li>
+          <li>Fine-grained RBAC and tenant isolation</li>
+          <li>Prevention of unauthorized tool and data access</li>
+          <li>Sandboxed, controlled MCP and tool execution</li>
+          <li>Centralized policy management for all agents</li>
+        </ul>
+      </div>
+      <div class="cluster">
+        <div class="cluster-title">Detection &amp; risk</div>
+        <ul>
+          <li>Real-time monitoring of agent and MCP activity</li>
+          <li>AI risk scoring and anomaly detection</li>
+          <li>PII and sensitive-data protection controls</li>
+          <li>Human approval workflows for sensitive actions</li>
+          <li>Safe autonomous workflow execution</li>
+          <li>Reduced enterprise security and compliance risk</li>
+        </ul>
+      </div>
+      <div class="cluster">
+        <div class="cluster-title">Compliance &amp; audit</div>
+        <ul>
+          <li>Immutable audit logs for compliance and investigation</li>
+          <li>SOC 2, GDPR, HIPAA and ISO support</li>
+          <li>Centralized observability dashboard for all agents</li>
+          <li>Cost and token-usage analytics per agent and team</li>
+          <li>Standardized governance across all AI systems</li>
+          <li>Increased trust in enterprise AI systems</li>
+        </ul>
+      </div>
+      <div class="cluster">
+        <div class="cluster-title">Platform &amp; operations</div>
+        <ul>
+          <li>On-prem and hybrid-cloud deployment support</li>
+          <li>Scalable multi-agent orchestration visibility</li>
+          <li>Extensible architecture for future MCP ecosystems</li>
+          <li>Reduced overhead for platform and security teams</li>
+          <li>Easier enterprise AI adoption with security controls</li>
+          <li>Foundation for an enterprise AI control plane</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow"><b>08</b> &nbsp;The five that matter</div>
+    <h2>If the platform delivers nothing else, it delivers these.</h2>
+
+    <div class="pillars">
+      <div class="pillar">
+        <span class="pillar-n">01</span>
+        <div>
+          <div class="pillar-t">End-to-end agent and MCP traceability, with complete execution audit logs</div>
+        </div>
+      </div>
+      <div class="pillar">
+        <span class="pillar-n">02</span>
+        <div>
+          <div class="pillar-t">Centralized MCP entitlement enforcement and zero-trust access control</div>
+        </div>
+      </div>
+      <div class="pillar">
+        <span class="pillar-n">03</span>
+        <div>
+          <div class="pillar-t">Real-time observability, monitoring and distributed tracing for AI agents</div>
+        </div>
+      </div>
+      <div class="pillar">
+        <span class="pillar-n">04</span>
+        <div>
+          <div class="pillar-t">Enterprise-grade security, compliance and policy governance framework</div>
+        </div>
+      </div>
+      <div class="pillar">
+        <span class="pillar-n">05</span>
+        <div>
+          <div class="pillar-t">Safe, controlled autonomous execution with human approval workflows</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="vision">
+    <div class="eyebrow"><b>09</b> &nbsp;Why it matters</div>
+    <blockquote>
+      Datadog became essential for cloud infrastructure. CrowdStrike, for the endpoint.
+      The autonomous agent needs its own layer.
+    </blockquote>
+    <div class="prose">
+      <p>
+        GuardianOps is built to be the foundational security and governance layer for the
+        autonomous agent era — giving enterprises the operational trust and execution transparency
+        required to put fully autonomous systems into production, and to keep them there.
+      </p>
+    </div>
+  </section>
+
+  <div class="colophon">
+    <span>GuardianOps · Runtime governance &amp; behavioral drift detection</span>
+    <span>Concept brief</span>
+  </div>
+
+</div>

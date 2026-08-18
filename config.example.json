@@ -1,0 +1,76 @@
+{
+  "mode": "enforce",
+  "defaultDecision": "allow",
+  "auditPath": ".guardianops/audit.jsonl",
+  "filterToolList": true,
+  "tools": {
+    "allow": [
+      "search_docs",
+      "read_document",
+      "save_memory",
+      "send_message"
+    ],
+    "deny": [],
+    "tiers": {
+      "read": [
+        "search_docs",
+        "read_document"
+      ],
+      "write": [
+        "save_memory"
+      ],
+      "destructive": [
+        "send_message"
+      ]
+    },
+    "constraints": {
+      "read_document": {
+        "doc_id": {
+          "prefix": [
+            "kb/"
+          ],
+          "denyPrefix": [
+            "kb/private/",
+            "kb/secrets/"
+          ]
+        }
+      },
+      "save_memory": {
+        "key": {
+          "required": true
+        }
+      },
+      "send_message": {
+        "to": {
+          "pattern": "[^@\\s]+@example\\.com",
+          "required": true
+        }
+      }
+    }
+  },
+  "approval": {
+    "requireFor": [
+      "destructive",
+      "unclassified"
+    ],
+    "timeoutSeconds": 120,
+    "onTimeout": "block",
+    "autonomyThreshold": 25
+  },
+  "scan": {
+    "definitions": "warn",
+    "responses": "sanitize"
+  },
+  "pin": {
+    "path": ".guardianops/pins.json",
+    "onChange": "escalate"
+  },
+  "redactKeys": [
+    "password",
+    "secret",
+    "token",
+    "api_key",
+    "authorization",
+    "credential"
+  ]
+}

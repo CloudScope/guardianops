@@ -1,0 +1,88 @@
+name: Publish
+
+# Publishing is driven by a GitHub Release rather than a push, so cutting a
+# version is a deliberate act with release notes attached to it.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Where to upload
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: The tag and the version must agree
+        # A PyPI version can be uploaded exactly once, so publishing 0.1.0 from
+        # a v0.2.0 tag burns the wrong number permanently. Cheaper to fail here.
+        if: github.event_name == 'release'
+        run: |
+          python - <<'PY'
+          import os, pathlib, sys, tomllib
+          version = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"]
+          tag = os.environ["TAG"].lstrip("v")
+          if tag != version:
+              sys.exit(f"tag {tag!r} does not match pyproject version {version!r}")
+          print(f"tag and version agree on {version}")
+          PY
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+
+      - name: Tests must pass before anything is uploaded
+        run: |
+          pip install -e ".[adk]"
+          python -m unittest discover -s tests
+
+      - name: Build and check
+        run: |
+          pip install build twine
+          python -m build
+          twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  testpypi:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write        # trusted publishing: no API token stored anywhere
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    needs: build
+    if: github.event_name == 'release' || inputs.target == 'pypi'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

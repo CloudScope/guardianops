@@ -1,0 +1,49 @@
+{
+  "mode": "shadow",
+  "defaultDecision": "allow",
+  "auditPath": ".guardianops/audit.jsonl",
+
+  "tools": {
+    "allow": ["read_config", "set_timeout", "query_customers", "transfer_to_agent"],
+    "deny": [],
+    "tiers": {
+      "read": ["read_config", "query_customers"],
+      "write": ["set_timeout"],
+      "destructive": ["attach_role_policy"],
+      "control": ["transfer_to_agent"]
+    },
+
+    "constraints": {
+      "read_config": {
+        "path": {
+          "prefix": ["/workspace/"],
+          "denyPrefix": ["/workspace/.env", "/workspace/.git"]
+        }
+      },
+      "set_timeout": {
+        "path": { "prefix": ["/workspace/"] },
+        "seconds": { "pattern": "[0-9]{1,3}" }
+      },
+      "query_customers": {
+        "table": { "in": ["public_docs", "tool_catalog"] }
+      }
+    }
+  },
+
+  "approval": {
+    "requireFor": ["destructive", "unclassified"],
+    "timeoutSeconds": 120,
+    "onTimeout": "block",
+    "autonomyThreshold": 25,
+    "contextThreshold": null
+  },
+
+  "pin": {
+    "path": ".guardianops/pins.json",
+    "onChange": "escalate"
+  },
+
+  "redactKeys": [
+    "password", "secret", "token", "api_key", "authorization", "credential"
+  ]
+}

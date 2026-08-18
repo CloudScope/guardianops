@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# GuardianOps
+.venv/
+.tools/
+.guardianops/
+
+# macOS
+.DS_Store

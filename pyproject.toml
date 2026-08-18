@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "guardianops"
+version = "0.1.0"
+description = "Runtime governance and behavioral drift detection for autonomous AI agents and MCP ecosystems"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Raghunath Pradhan", email = "pradhanraghunath91@gmail.com" }]
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "agent-governance",
+    "prompt-injection",
+    "tool-poisoning",
+    "audit",
+    "guardrails",
+    "adk",
+]
+dependencies = []          # stdlib only, on purpose
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+# Pinned from what this project is actually tested against: ADK 2.6.2, and
+# mcp<2 because 2.0 moved mcp.shared.session, which ADK still imports.
+adk = ["google-adk>=2.0.0", "mcp>=1.9,<2"]
+
+[project.urls]
+Homepage = "https://github.com/CloudScope/guardianops"
+Source = "https://github.com/CloudScope/guardianops"
+Issues = "https://github.com/CloudScope/guardianops/issues"
+
+[project.scripts]
+guardianops = "guardianops.cli:main"
+
+[tool.setuptools]
+packages = ["guardianops", "guardianops.upstream"]
+
+[tool.setuptools.package-data]
+guardianops = ["py.typed"]

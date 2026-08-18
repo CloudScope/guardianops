@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # The suite is run twice on purpose. GuardianOps is stdlib-only, and the ADK
+    # integration is written against a contract rather than an import, so it has
+    # to keep working with google-adk absent. Running only the environment that
+    # has ADK installed is how two tests sat silently red for an afternoon.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Tests with nothing installed
+        run: python -m unittest discover -s tests -v
+
+      - name: Install the adk extra
+        run: pip install -e ".[adk]"
+
+      - name: Tests with ADK present
+        run: python -m unittest discover -s tests -v
+
+      - name: Fail if anything is still skipped once ADK is installed
+        # A skip is only legitimate when the dependency is genuinely missing.
+        # With ADK installed, a skip means a test that never runs anywhere.
+        run: |
+          python - <<'PY'
+          import sys, unittest
+          result = unittest.TextTestRunner(verbosity=0).run(
+              unittest.defaultTestLoader.discover("tests")
+          )
+          if result.skipped:
+              print("Skipped even though ADK is installed:")
+              for test, why in result.skipped:
+                  print(f"  {test.id()} - {why}")
+              sys.exit(1)
+          print(f"no skips, {result.testsRun} tests ran")
+          PY
+
+  demo:
+    # The end-to-end path: a real proxy subprocess speaking JSON-RPC to a real
+    # MCP server. Unit tests use a fake upstream and would not catch a break in
+    # transport framing or process startup.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Each demo wipes .guardianops/ on start, so the ledger is verified
+      # after each one. Verifying once at the end would only ever check
+      # whichever demo ran last.
+      - name: MCP proxy, end to end
+        run: |
+          python demo.py
+          python -m guardianops verify --audit .guardianops/audit.jsonl
+          python -m guardianops pins --show
+
+      - name: ADK guard, replayed without ADK
+        run: |
+          python demo_adk.py
+          python -m guardianops verify --audit .guardianops/audit.jsonl
+
+  package:
+    # Build what would be uploaded, and prove a stranger can install and import
+    # it without a checkout.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          pip install build twine
+          python -m build
+          twine check dist/*
+
+      - name: Install the wheel somewhere clean and use it
+        run: |
+          python -m venv /tmp/consumer
+          /tmp/consumer/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/consumer/bin/python -c "
+          import guardianops
+          from guardianops import policy, scan
+          from guardianops.adk import GuardianOpsGuard
+          cfg = policy.Config(mode=policy.ENFORCE, allow=['search_docs'])
+          v = policy.evaluate(cfg, 'export_contacts', novel=True,
+                              pin_changed=False, calls_since_approval=0)
+          assert v.decision == policy.BLOCK, v
+          print('import + decide OK, version', guardianops.__version__)
+          "
+          /tmp/consumer/bin/guardianops --help > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

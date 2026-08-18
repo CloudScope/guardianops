@@ -1,0 +1,39 @@
+{
+  "mode": "shadow",
+  "defaultDecision": "allow",
+  "auditPath": ".guardianops/audit.jsonl",
+  "tools": {
+    "allow": [
+      "search_docs",
+      "read_document",
+      "save_memory",
+      "send_message"
+    ],
+    "deny": [],
+    "tiers": {
+      "read": [
+        "search_docs",
+        "read_document"
+      ],
+      "write": [
+        "save_memory"
+      ],
+      "destructive": [
+        "send_message"
+      ]
+    }
+  },
+  "approval": {
+    "requireFor": [
+      "destructive",
+      "unclassified"
+    ],
+    "timeoutSeconds": 120,
+    "onTimeout": "block",
+    "autonomyThreshold": 25
+  },
+  "pin": {
+    "path": ".guardianops/pins.json",
+    "onChange": "escalate"
+  }
+}
