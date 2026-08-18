@@ -274,6 +274,7 @@ Full example with every section:
   // Relative paths resolve next to THIS FILE, not the working directory.
   "auditPath":    ".guardianops/ledger/agent-support.jsonl",
   "baselinePath": ".guardianops/baseline.json",
+  "auditKey":     "/etc/guardianops/ledger.key",  // sign records with HMAC; omit for unsigned
   "filterToolList": true,             // strip non-entitled tools from tools/list
 
   "tools": {
@@ -302,6 +303,12 @@ Full example with every section:
     "contextExemptTiers": ["control"]
   },
 
+  "breaker": {                        // proxy only; stops a run, not one call
+    "consecutiveBlocks": 5,           // refusals in a row before tripping; 0 = off
+    "totalBlocks": 0,                 // refusals in the whole run; 0 = off
+    "onTrip": "warn"                  // "warn" | "block"
+  },
+
   "pin": {
     "path": ".guardianops/pins.json",
     "onChange": "escalate"            // "block" | "escalate" | "warn"
@@ -320,7 +327,9 @@ Full example with every section:
     "message": "That is outside what this agent handles."
   },
 
-  "redactKeys": ["password", "secret", "token", "api_key", "credential"]
+  "redactKeys": ["password", "secret", "token", "api_key", "credential"],
+  "redactPatterns": null              // omit to keep the built-in value patterns;
+                                      // [] disables value scanning entirely
 }
 ```
 
@@ -518,7 +527,73 @@ safe — and better — shared.
 Every record commits to its predecessor. Editing or deleting a line invalidates
 everything after it, and `verify` names the break — distinguishing a truncated
 tail (a crash) from an altered record in the middle (a security event).
-Credential-shaped argument keys are redacted before they are written.
+
+Credentials are redacted before they are written, both by key name and by value
+shape — see [Redaction](#redaction). Set `auditKey` to sign records with HMAC so
+the chain cannot be recomputed by whoever can write the file:
+
+```bash
+openssl rand -hex 32 > /etc/guardianops/ledger.key
+chmod 600 /etc/guardianops/ledger.key
+```
+
+```json
+{ "auditKey": "/etc/guardianops/ledger.key" }
+```
+
+Signed ledgers need the key to verify, and `validate` will tell you if the key
+file is readable by other users or sits in the same directory as the ledger it
+signs:
+
+```bash
+guardianops verify --audit .guardianops/audit.jsonl --key /etc/guardianops/ledger.key
+guardianops verify --audit .guardianops/audit.jsonl --config config.json
+```
+
+Verifying a signed ledger without the key reports that it cannot be verified,
+rather than alleging tampering — an operator should not go hunting for an
+intrusion that is really a missing argument.
+
+### Redaction
+
+Two passes, because secrets arrive under telling keys and innocent ones alike:
+
+- `redactKeys` masks a whole value when its key looks like a credential
+  (`password`, `token`, `api_key`, …).
+- `redactPatterns` masks secrets found *inside* a value. Defaults cover
+  issuer-prefixed tokens (`sk-`, `AKIA`, `ghp_`, `xoxb-`, `AIza`, `glpat-`,
+  `npm_`), JWTs, PEM private-key blocks, `Bearer` headers, `TOKEN=...`
+  assignments, and passwords in `scheme://user:pass@host` strings.
+
+Where a pattern can name the secret precisely, only that part is masked, so
+`export TOKEN=sk-live-...` becomes `export TOKEN=***redacted***` and the record
+stays readable. Set `"redactPatterns": []` to disable value scanning; supplying
+your own list replaces the defaults rather than adding to them.
+
+This is pattern matching against arbitrary strings: it catches the recognisable
+and misses the novel. Treat it as a tripwire, not a guarantee.
+
+### Stopping a run
+
+A verdict governs one call. An agent that is refused and immediately retries a
+variant is a loop, and every turn of it costs an operator another decision.
+
+- **Kill switch.** `[k]` at the approval prompt ends the run rather than just
+  declining the call. Nothing further is served and the operator stops being
+  asked. `[b]` still blocks the single call.
+- **Circuit breaker.** `breaker.consecutiveBlocks` (default 5) counts refusals
+  in a row; `breaker.totalBlocks` counts them across the whole run. An allowed
+  call resets the streak, so an agent that is blocked once, adapts, and then
+  works correctly does not trip it.
+
+```json
+{ "breaker": { "consecutiveBlocks": 5, "totalBlocks": 0, "onTrip": "block" } }
+```
+
+`onTrip` defaults to `"warn"`, which records the trip without acting on it —
+where any new breaker config should start. Shadow mode never stops a run
+whatever `onTrip` says. Both the kill switch and a breaker trip write a
+`run.stopped` record to the ledger.
 
 ---
 
@@ -585,9 +660,9 @@ swallowed — governance already happened by the time it runs.
   misses the novel and the paraphrased.
 - **Local state.** Ledger, pins and baseline are files. Production wants an
   append-only sink and a key held outside the agent host.
-- **The ledger is tamper-evident, not tamper-proof.** Anyone who can write the
-  file can recompute the chain.
-- **No kill switch.** A human can decline one call but cannot terminate a run.
+- **The ledger is only as tamper-proof as the key.** Unsigned, anyone who can
+  write the file can recompute the chain. `auditKey` detects that forgery, but
+  the guarantee is the key's — hold it off-host.
 - **Cold start.** A new agent has no baseline, so novelty fires on everything
   for the first run.
 

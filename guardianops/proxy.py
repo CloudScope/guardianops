@@ -52,6 +52,7 @@ class Counters:
     blocked: int = 0
     escalated: int = 0
     allowed: int = 0
+    consecutive_blocks: int = 0
     distinct_tools: set[str] = field(default_factory=set)
 
 
@@ -69,7 +70,10 @@ class Proxy:
         self.up = up
         self.run_id = run_id or f"run-{uuid.uuid4().hex[:8]}"
         self.approver = approver or hitl.TtyApprover()
-        self.audit = AuditLog(cfg.audit_path, self.run_id, sync_mode=cfg.audit_sync)
+        self.audit = AuditLog(
+            cfg.audit_path, self.run_id,
+            sync_mode=cfg.audit_sync, key=cfg.audit_key(),
+        )
         self.pins = PinStore(cfg.pin.path)
         self.baseline = InvocationBaseline(baseline_path)
 
@@ -78,6 +82,9 @@ class Proxy:
         self.pin_status: dict[str, str] = {}
         self.tool_defs: dict[str, dict[str, Any]] = {}
         self.session_allow: set[str] = set()
+        # Set once and never cleared: a run an operator ended, or one the
+        # breaker ended, does not get to resume because the next call looks fine.
+        self.stopped: str | None = None
         self.counters = Counters()
 
         self._out_lock = asyncio.Lock()
@@ -181,6 +188,10 @@ class Proxy:
         tool = params.get("name", "<unnamed>")
         arguments = params.get("arguments", {})
 
+        if self.stopped:
+            await self._refuse_stopped(message, tool)
+            return
+
         started = time.perf_counter()
         verdict = policy.evaluate(
             self.cfg,
@@ -211,8 +222,10 @@ class Proxy:
                     self.session_allow.add(tool)
             else:
                 outcome = policy.BLOCK
+                if approval == hitl.KILL_RUN:
+                    self._stop_run("operator ended the run at the approval prompt")
 
-        redacted = policy.redact(arguments, self.cfg.redact_keys)
+        redacted = self.cfg.redact(arguments)
         self.audit.record(
             "tool.call",
             server=self.server,
@@ -233,6 +246,8 @@ class Proxy:
 
         if outcome == policy.BLOCK:
             self.counters.blocked += 1
+            self.counters.consecutive_blocks += 1
+            self._check_breaker()
             note = "would have blocked" if verdict.shadowed else "blocked"
             log(f"{note} {tool} · risk {verdict.risk:.2f} · {verdict.reason}")
             if verdict.shadowed:
@@ -254,9 +269,61 @@ class Proxy:
             return
 
         self.counters.allowed += 1
+        self.counters.consecutive_blocks = 0
         if verdict.risk >= 0.4:
             log(f"allowed {tool} · risk {verdict.risk:.2f} · {verdict.reason}")
         await self._forward_call(message, tool)
+
+    def _stop_run(self, reason: str) -> None:
+        """End the run. Idempotent: the first reason is the one that counts."""
+        if self.stopped:
+            return
+        self.stopped = reason
+        log(f"RUN STOPPED · {reason}")
+        self.audit.record("run.stopped", server=self.server, reason=reason)
+
+    def _check_breaker(self) -> None:
+        why = self.cfg.breaker.tripped_by(
+            self.counters.consecutive_blocks, self.counters.blocked
+        )
+        if not why or self.stopped:
+            return
+        if self.cfg.breaker.on_trip == policy.BLOCK and self.cfg.mode == policy.ENFORCE:
+            self._stop_run(f"circuit breaker: {why}")
+            return
+        # Either configured to warn, or shadow mode, which never interferes.
+        log(f"circuit breaker would trip · {why}")
+        self.audit.record(
+            "breaker.warn", server=self.server, reason=why, shadowed=True
+        )
+
+    async def _refuse_stopped(self, message: Message, tool: str) -> None:
+        """Refuse a call made after the run was stopped, and say why."""
+        self.counters.calls_total += 1
+        self.counters.blocked += 1
+        self.audit.record(
+            "tool.call",
+            server=self.server,
+            tool=tool,
+            tier=self.cfg.tier_of(tool),
+            decision=policy.BLOCK,
+            outcome=policy.BLOCK,
+            held=False,
+            shadowed=False,
+            reason=f"run stopped: {self.stopped}",
+            risk=1.0,
+        )
+        log(f"blocked {tool} · run stopped: {self.stopped}")
+        await self._to_client(
+            jsonrpc.tool_error_result(
+                message["id"],
+                f"GuardianOps has stopped this run.\n"
+                f"reason: {self.stopped}\n"
+                f"No further tool calls will be served. Do not retry, do not "
+                f"work around this, and do not substitute a result. Tell the "
+                f"user the run was stopped and stop.",
+            )
+        )
 
     async def _forward_call(self, message: Message, tool: str) -> None:
         self.baseline.observe(self.server, tool)
@@ -277,7 +344,7 @@ class Proxy:
             "risk": verdict.risk,
             "signals": verdict.signals.as_dict(),
             "arguments": json.dumps(
-                policy.redact(arguments, self.cfg.redact_keys), indent=2
+                self.cfg.redact(arguments), indent=2
             ),
         }
         log(f"HELD {tool} · risk {verdict.risk:.2f} · {verdict.reason}")

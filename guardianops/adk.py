@@ -254,6 +254,7 @@ class GuardianOpsGuard:
             self.cfg.audit_path,
             run_id=f"adk-{uuid.uuid4().hex[:8]}",
             sync_mode=self.cfg.audit_sync,
+            key=self.cfg.audit_key(),
         )
         self._runs: dict[str, _Run] = {}
 
@@ -402,7 +403,7 @@ class GuardianOpsGuard:
             "run.objective",
             adk_run=run.run_id,
             agent=run.agent,
-            objective=policy.redact({"text": objective}, self.cfg.redact_keys)["text"],
+            objective=self.cfg.redact({"text": objective})["text"],
             scope_drift=round(drift, 3),
             out_of_scope=out_of_scope,
             denied_pattern=denied,
@@ -496,7 +497,7 @@ class GuardianOpsGuard:
             signals=verdict.signals.as_dict(),
             approval=approval,
             prior_invocations=self.baseline.count(key, name),
-            arguments=policy.redact(args, self.cfg.redact_keys),
+            arguments=self.cfg.redact(args),
         )
         self._emit(record)
 
@@ -558,7 +559,7 @@ class GuardianOpsGuard:
             "reason": verdict.reason,
             "risk": verdict.risk,
             "signals": verdict.signals.as_dict(),
-            "arguments": str(policy.redact(args, self.cfg.redact_keys)),
+            "arguments": str(self.cfg.redact(args)),
         }
         log(f"HELD {tool} · risk {verdict.risk:.2f} · {verdict.reason}")
         answer = await self.approver.request(panel, self.cfg.approval.timeout_seconds)

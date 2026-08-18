@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from . import policy
-from .audit import read_all, verify
+from .audit import KeyRequired, load_key as audit_load_key, read_all, verify
 from .pins import PinStore
 from .proxy import Proxy
 from .upstream import HttpUpstream, StdioUpstream
@@ -50,6 +50,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ver = sub.add_parser("verify", help="verify the audit ledger hash chain")
     ver.add_argument("--audit", default=".guardianops/audit.jsonl",
                      help="a ledger file, or a directory of them (one per writer)")
+    ver.add_argument("--key", help="path to the ledger signing key (for signed ledgers)")
+    ver.add_argument("--config", help="take the signing key from a policy's auditKey")
 
     rep = sub.add_parser("report", help="summarize runs recorded in the ledger")
     rep.add_argument("--audit", default=".guardianops/audit.jsonl",
@@ -127,6 +129,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
             "warning: policy has errors; continuing because mode is shadow\n"
         )
 
+    # Fail here rather than inside the proxy: an operator who configured a
+    # signing key must not end up with an unsigned ledger they believe is signed.
+    try:
+        cfg.audit_key()
+    except ValueError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 2
+
     argv = [a for a in args.upstream_cmd if a != "--"]
     if args.upstream_url and argv:
         sys.stderr.write("error: give either --upstream-url or a stdio command, not both\n")
@@ -169,18 +179,41 @@ def _ledgers(target: str) -> list[Path]:
     return [path] if path.exists() else []
 
 
+def _verify_key(args: argparse.Namespace) -> bytes | None:
+    """The signing key for verification, from --key or a policy's auditKey."""
+    if args.key:
+        return audit_load_key(args.key)
+    if args.config:
+        return _load_config(args.config).audit_key()
+    return None
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     paths = _ledgers(args.audit)
     if not paths:
         sys.stderr.write(f"no ledger at {args.audit}\n")
         return 1
 
+    try:
+        key = _verify_key(args)
+    except (ValueError, OSError) as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 2
+
     failed = 0
     for path in paths:
-        ok, count, error = verify(str(path))
         label = path.name if len(paths) > 1 else str(path)
+        try:
+            ok, count, error = verify(str(path), key)
+        except KeyRequired as exc:
+            # Not a chain failure: the ledger may be perfectly intact and we
+            # simply cannot tell. Saying "tampered" would start a false hunt.
+            sys.stderr.write(f"cannot verify · {exc} · {label}\n")
+            failed += 1
+            continue
+        signed = " · signed" if key else ""
         if ok:
-            print(f"ledger intact · {count} records · chain verified · {label}")
+            print(f"ledger intact · {count} records · chain verified{signed} · {label}")
         else:
             print(f"LEDGER TAMPERED · {error} · {label}")
             failed += 1

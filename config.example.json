@@ -57,6 +57,11 @@
     "onTimeout": "block",
     "autonomyThreshold": 25
   },
+  "breaker": {
+    "consecutiveBlocks": 5,
+    "totalBlocks": 0,
+    "onTrip": "block"
+  },
   "scan": {
     "definitions": "warn",
     "responses": "sanitize"

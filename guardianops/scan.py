@@ -95,8 +95,12 @@ class ScanConfig:
             return cfg
         cfg.definitions = raw.get("definitions", cfg.definitions)
         cfg.responses = raw.get("responses", cfg.responses)
-        cfg.definition_patterns = raw.get("definitionPatterns", cfg.definition_patterns)
-        cfg.response_patterns = raw.get("responsePatterns", cfg.response_patterns)
+        # An explicit null is a placeholder, not an instruction to drop the
+        # defaults and leave the scanner with nothing to match.
+        if raw.get("definitionPatterns") is not None:
+            cfg.definition_patterns = raw["definitionPatterns"]
+        if raw.get("responsePatterns") is not None:
+            cfg.response_patterns = raw["responsePatterns"]
         cfg.max_response_bytes = raw.get("maxResponseBytes", cfg.max_response_bytes)
         return cfg
 

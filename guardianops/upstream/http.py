@@ -50,7 +50,6 @@ class HttpUpstream:
         task.add_done_callback(self._tasks.discard)
 
     async def _post(self, message: Message) -> None:
-        loop = asyncio.get_running_loop()
         try:
             messages = await asyncio.to_thread(self._post_blocking, message)
         except urllib.error.HTTPError as exc:
@@ -73,7 +72,6 @@ class HttpUpstream:
             return
         for item in messages:
             await self.inbox.put(item)
-        del loop
 
     def _post_blocking(self, message: Message) -> list[Message]:
         body = json.dumps(message, separators=(",", ":")).encode("utf-8")
@@ -102,6 +100,23 @@ class HttpUpstream:
             task.cancel()
 
 
+def _decode(data_lines: list[str]) -> list[Message]:
+    """One SSE event's data field, as zero or more JSON-RPC messages.
+
+    A malformed event yields nothing rather than raising: one bad event must not
+    discard the events behind it in the same stream.
+    """
+    try:
+        payload = json.loads("\n".join(data_lines))
+    except json.JSONDecodeError:
+        return []
+    if isinstance(payload, dict):
+        return [payload]
+    if isinstance(payload, list):
+        return [m for m in payload if isinstance(m, dict)]
+    return []
+
+
 def _read_sse(stream: Any) -> list[Message]:
     """Collect JSON-RPC messages from an SSE body until the stream closes."""
     messages: list[Message] = []
@@ -110,14 +125,7 @@ def _read_sse(stream: Any) -> list[Message]:
         line = raw_line.decode("utf-8").rstrip("\r\n")
         if line == "":
             if data_lines:
-                try:
-                    payload = json.loads("\n".join(data_lines))
-                except json.JSONDecodeError:
-                    payload = None
-                if isinstance(payload, dict):
-                    messages.append(payload)
-                elif isinstance(payload, list):
-                    messages.extend(m for m in payload if isinstance(m, dict))
+                messages.extend(_decode(data_lines))
                 data_lines = []
             continue
         if line.startswith(":"):
@@ -126,10 +134,8 @@ def _read_sse(stream: Any) -> list[Message]:
         if field == "data":
             data_lines.append(value[1:] if value.startswith(" ") else value)
     if data_lines:
-        try:
-            payload = json.loads("\n".join(data_lines))
-            if isinstance(payload, dict):
-                messages.append(payload)
-        except json.JSONDecodeError:
-            pass
+        # A stream closed without a final blank line still carries a message,
+        # and it is handled exactly like a delimited one -- arrays included.
+        # Treating the tail differently silently dropped batched replies.
+        messages.extend(_decode(data_lines))
     return messages

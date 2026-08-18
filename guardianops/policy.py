@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import scan
+from . import audit, scan
 from typing import Any
 
 # Decisions
@@ -53,6 +53,41 @@ WEIGHTS = {
 DEFAULT_REDACT = [
     "password", "passwd", "secret", "token", "api_key", "apikey",
     "authorization", "credential", "credentials", "private_key",
+]
+
+# Secrets that arrive inside a value rather than under a telling key. Key-based
+# redaction cannot see these at all: in ``{"cmd": "export TOKEN=sk-live-..."}``
+# the key is "cmd", so the credential reaches the ledger untouched.
+#
+# Kept to shapes that are unambiguous -- a recognisable issuer prefix, or a
+# secret introduced by name -- because the cost of a false positive here is a
+# corrupted audit record, and an unreadable ledger is its own kind of failure.
+# A group named ``secret`` narrows redaction to that group; otherwise the whole
+# match is replaced.
+DEFAULT_REDACT_PATTERNS = [
+    r"\bsk-[A-Za-z0-9_\-]{16,}",                       # OpenAI, Stripe
+    r"\bAKIA[0-9A-Z]{16}\b",                            # AWS access key id
+    r"\bASIA[0-9A-Z]{16}\b",                            # AWS temporary key id
+    r"\bgh[pousr]_[A-Za-z0-9]{20,}",                     # GitHub
+    r"\bglpat-[A-Za-z0-9_\-]{16,}",                     # GitLab
+    r"\bxox[abprs]-[A-Za-z0-9\-]{10,}",                 # Slack
+    r"\bAIza[0-9A-Za-z_\-]{35}\b",                      # Google API key
+    r"\bnpm_[A-Za-z0-9]{36}\b",                          # npm
+    r"\bdop_v1_[a-f0-9]{64}\b",                          # DigitalOcean
+    # JWT: three base64url segments, header first so "a.b.c" does not match.
+    r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}",
+    # The whole PEM block, not just its header: masking the marker and leaving
+    # the key material behind would be worse than useless, because the record
+    # then looks redacted. Runs to END, or to the end of the value if truncated.
+    r"-----BEGIN(?: [A-Z]+)* PRIVATE KEY-----[\s\S]*?"
+    r"(?:-----END(?: [A-Z]+)* PRIVATE KEY-----|$)",
+    r"(?i)\bBearer\s+(?P<secret>[A-Za-z0-9._\-]{20,})",
+    # A secret introduced by name, which is how they appear in shell commands
+    # and connection strings alike.
+    r"(?i)\b(?:token|secret|passwd|password|api[_-]?key|access[_-]?key"
+    r"|client[_-]?secret)\b\s*[=:]\s*(?P<secret>[^\s,;'\"&]{6,})",
+    # user:password@host
+    r"(?i)\b[a-z][a-z0-9+.\-]*://[^\s:/@]+:(?P<secret>[^\s@/]{3,})@",
 ]
 
 
@@ -116,9 +151,10 @@ class Finding:
 _KNOWN_KEYS: dict[str, frozenset[str]] = {
     "": frozenset({
         "name", "mode", "defaultDecision", "auditPath", "baselinePath",
-        "auditSync", "filterToolList", "redactKeys",
-        "tools", "approval", "pin", "scope", "scan",
+        "auditSync", "auditKey", "filterToolList", "redactKeys", "redactPatterns",
+        "tools", "approval", "breaker", "pin", "scope", "scan",
     }),
+    "breaker": frozenset({"consecutiveBlocks", "totalBlocks", "onTrip"}),
     "tools": frozenset({"allow", "deny", "tiers", "constraints"}),
     "approval": frozenset({
         "requireFor", "timeoutSeconds", "onTimeout", "autonomyThreshold",
@@ -229,6 +265,41 @@ class ArgumentConstraint:
 
 
 @dataclass
+class BreakerConfig:
+    """When to stop asking and stop the run.
+
+    Blocking one call governs one call. An agent that is refused and immediately
+    retries a variant is not deterred by that -- it is a loop, and every turn of
+    it costs an operator another decision. The breaker counts refusals and ends
+    the run, which is the thing a per-call verdict cannot do.
+
+    Consecutive rather than cumulative by default: an agent that is blocked once,
+    adapts, and then works correctly has not misbehaved, and counting that
+    against it would trip on healthy runs.
+    """
+
+    # Blocked calls in a row before the breaker trips. 0 disables the check.
+    consecutive_blocks: int = 5
+    # Blocked calls anywhere in the run before it trips. 0 disables.
+    total_blocks: int = 0
+    # "warn" | "block" -- warn records the trip and keeps going, which is where
+    # any new breaker config should start. "block" refuses every later call.
+    on_trip: str = "warn"
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.consecutive_blocks or self.total_blocks)
+
+    def tripped_by(self, consecutive: int, total: int) -> str | None:
+        """Why the breaker should trip on these counts, or None."""
+        if self.consecutive_blocks and consecutive >= self.consecutive_blocks:
+            return f"{consecutive} calls blocked in a row"
+        if self.total_blocks and total >= self.total_blocks:
+            return f"{total} calls blocked in this run"
+        return None
+
+
+@dataclass
 class PinConfig:
     path: str = ".guardianops/pins.json"
     # "block" | "escalate" | "warn" -- what a changed tool schema does.
@@ -287,6 +358,19 @@ class ScopeConfig:
         return None
 
 
+def _opt(data: dict[str, Any], key: str, default: Any) -> Any:
+    """``data[key]``, treating an explicit JSON null as "not set".
+
+    Only used for keys whose value is a list or a mapping. A null there is
+    almost always a placeholder, and reading it literally hands an unusable
+    ``None`` to code that will iterate it much later, somewhere unrelated.
+    Keys where null is *meaningful* -- contextThreshold, scope.threshold --
+    deliberately do not go through here.
+    """
+    value = data.get(key)
+    return default if value is None else value
+
+
 def _anchor(path: str, base: Path) -> str:
     """Resolve a state path against the policy's own directory."""
     return path if Path(path).is_absolute() else str((base / path).resolve())
@@ -306,6 +390,7 @@ class Config:
     # tool name -> argument name -> constraint
     constraints: dict[str, dict[str, ArgumentConstraint]] = field(default_factory=dict)
     approval: ApprovalConfig = field(default_factory=ApprovalConfig)
+    breaker: BreakerConfig = field(default_factory=BreakerConfig)
     pin: PinConfig = field(default_factory=PinConfig)
     scope: ScopeConfig = field(default_factory=ScopeConfig)
     # Content scanning for tool definitions and tool results -- the two places
@@ -313,6 +398,10 @@ class Config:
     scan: scan.ScanConfig = field(default_factory=scan.ScanConfig)
     audit_path: str = ".guardianops/audit.jsonl"
     baseline_path: str = ".guardianops/baseline.json"
+    # Path to a secret that signs every ledger record. Empty means an unkeyed
+    # chain, which is tamper-evident only against someone who cannot rewrite the
+    # file -- see guardianops.audit.
+    audit_key_path: str = ""
     # The file this was loaded from, if any. Relative state paths are resolved
     # against its directory, so a policy carries its own storage with it.
     source: str = ""
@@ -320,6 +409,11 @@ class Config:
     # decisions are worth a real sync; routine allows are not.
     audit_sync: str = "critical"
     redact_keys: list[str] = field(default_factory=lambda: list(DEFAULT_REDACT))
+    # Patterns matched against argument *values*, for secrets that arrive with
+    # an innocent key. Empty disables value scanning.
+    redact_patterns: list[str] = field(
+        default_factory=lambda: list(DEFAULT_REDACT_PATTERNS)
+    )
     # Drop non-entitled tools from tools/list so the model never sees them.
     filter_tool_list: bool = True
     # Keys in the source document that no loader reads, recorded at parse time
@@ -364,14 +458,16 @@ class Config:
         cfg.default_decision = data.get("defaultDecision", cfg.default_decision)
         cfg.audit_path = data.get("auditPath", cfg.audit_path)
         cfg.baseline_path = data.get("baselinePath", cfg.baseline_path)
+        cfg.audit_key_path = data.get("auditKey", cfg.audit_key_path)
         cfg.audit_sync = data.get("auditSync", cfg.audit_sync)
         cfg.filter_tool_list = data.get("filterToolList", cfg.filter_tool_list)
-        cfg.redact_keys = data.get("redactKeys", cfg.redact_keys)
+        cfg.redact_keys = _opt(data, "redactKeys", cfg.redact_keys)
+        cfg.redact_patterns = _opt(data, "redactPatterns", cfg.redact_patterns)
 
         tools = data.get("tools", {})
-        cfg.allow = tools.get("allow", [])
-        cfg.deny = tools.get("deny", [])
-        cfg.tiers = tools.get("tiers", {})
+        cfg.allow = _opt(tools, "allow", [])
+        cfg.deny = _opt(tools, "deny", [])
+        cfg.tiers = _opt(tools, "tiers", {})
         cfg.constraints = {
             tool: {arg: ArgumentConstraint.parse(spec) for arg, spec in args.items()}
             for tool, args in (tools.get("constraints") or {}).items()
@@ -379,14 +475,21 @@ class Config:
 
         ap = data.get("approval", {})
         cfg.approval = ApprovalConfig(
-            require_for=ap.get("requireFor", cfg.approval.require_for),
+            require_for=_opt(ap, "requireFor", cfg.approval.require_for),
             timeout_seconds=ap.get("timeoutSeconds", cfg.approval.timeout_seconds),
             on_timeout=ap.get("onTimeout", cfg.approval.on_timeout),
             autonomy_threshold=ap.get("autonomyThreshold", cfg.approval.autonomy_threshold),
             context_threshold=ap.get("contextThreshold", cfg.approval.context_threshold),
-            context_exempt_tiers=ap.get(
-                "contextExemptTiers", cfg.approval.context_exempt_tiers
+            context_exempt_tiers=_opt(
+                ap, "contextExemptTiers", cfg.approval.context_exempt_tiers
             ),
+        )
+
+        br = data.get("breaker", {})
+        cfg.breaker = BreakerConfig(
+            consecutive_blocks=br.get("consecutiveBlocks", cfg.breaker.consecutive_blocks),
+            total_blocks=br.get("totalBlocks", cfg.breaker.total_blocks),
+            on_trip=br.get("onTrip", cfg.breaker.on_trip),
         )
 
         pin = data.get("pin", {})
@@ -397,9 +500,9 @@ class Config:
 
         scope = data.get("scope", {})
         cfg.scope = ScopeConfig(
-            terms=scope.get("terms", cfg.scope.terms),
+            terms=_opt(scope, "terms", cfg.scope.terms),
             threshold=scope.get("threshold", cfg.scope.threshold),
-            deny_patterns=scope.get("denyPatterns", cfg.scope.deny_patterns),
+            deny_patterns=_opt(scope, "denyPatterns", cfg.scope.deny_patterns),
             on_out_of_scope=scope.get("onOutOfScope", cfg.scope.on_out_of_scope),
             message=scope.get("message", cfg.scope.message),
         )
@@ -410,6 +513,8 @@ class Config:
         cfg.audit_path = _anchor(cfg.audit_path, base)
         cfg.baseline_path = _anchor(cfg.baseline_path, base)
         cfg.pin.path = _anchor(cfg.pin.path, base)
+        if cfg.audit_key_path:
+            cfg.audit_key_path = _anchor(cfg.audit_key_path, base)
         return cfg
 
     @staticmethod
@@ -517,6 +622,16 @@ class Config:
                     f"unknown tier {tier!r} (known: {sorted(known_tiers)})",
                 )
 
+        if self.breaker.consecutive_blocks < 0:
+            err("breaker.consecutiveBlocks", "must be zero (disabled) or positive")
+        if self.breaker.total_blocks < 0:
+            err("breaker.totalBlocks", "must be zero (disabled) or positive")
+        if self.breaker.on_trip not in (BLOCK, "warn"):
+            err(
+                "breaker.onTrip",
+                f"must be 'block' or 'warn', got {self.breaker.on_trip!r}",
+            )
+
         if self.pin.on_change not in (BLOCK, ESCALATE, "warn"):
             err(
                 "pin.onChange",
@@ -555,6 +670,33 @@ class Config:
                 f"must be 'always', 'critical' or 'interval', got {self.audit_sync!r}",
             )
 
+        if self.audit_key_path:
+            key_file = Path(self.audit_key_path)
+            if not key_file.exists():
+                err("auditKey", f"no such key file: {self.audit_key_path}")
+            else:
+                try:
+                    audit.load_key(self.audit_key_path)
+                except (ValueError, OSError) as exc:
+                    err("auditKey", str(exc))
+                if audit.key_is_exposed(self.audit_key_path):
+                    warn(
+                        "auditKey",
+                        "key file is readable by other users; chmod 600 it "
+                        "(a signing key anyone can read signs nothing)",
+                    )
+                if key_file.parent == Path(self.audit_path).parent:
+                    warn(
+                        "auditKey",
+                        "key file sits in the same directory as the ledger it "
+                        "signs, so anyone who can rewrite one can read the other",
+                    )
+        for pattern in self.redact_patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                err("redactPatterns", f"invalid regex {pattern!r}: {exc}")
+
         # Arguments are written to the ledger, and the ledger is append-only --
         # a secret that lands there cannot be taken back out. An empty list is
         # legal (some deployments redact upstream) but is rarely intended.
@@ -562,6 +704,24 @@ class Config:
             warn("redactKeys", "empty -- credentials in tool arguments will be logged verbatim")
 
         return found
+
+    def redact(self, value: Any) -> Any:
+        """Mask credentials in a value using this policy's keys and patterns."""
+        return redact(value, self.redact_keys, self.redact_patterns)
+
+    def audit_key(self) -> bytes | None:
+        """The ledger signing key, or None for an unkeyed chain.
+
+        Raises ValueError if a key is configured but unusable -- refusing to
+        start beats silently downgrading to an unsigned ledger the operator
+        believes is signed.
+        """
+        if not self.audit_key_path:
+            return None
+        try:
+            return audit.load_key(self.audit_key_path)
+        except OSError as exc:
+            raise ValueError(f"cannot read auditKey {self.audit_key_path}: {exc}") from None
 
     def errors(self) -> list["Finding"]:
         """Only the findings that make a policy unfit to enforce."""
@@ -716,25 +876,79 @@ def evaluate(
     return verdict(cfg.default_decision, "no rule matched; default decision")
 
 
-def redact(value: Any, keys: list[str], _depth: int = 0) -> Any:
-    """Recursively mask values whose key looks like a credential.
+MASK = "***redacted***"
+
+
+def _compile_redactors(patterns: list[str]) -> list[re.Pattern[str]]:
+    out = []
+    for pattern in patterns:
+        try:
+            out.append(re.compile(pattern))
+        except re.error:
+            # A typo in config must not stop the ledger being written. The
+            # pattern is dropped and the rest still apply; validate() reports it.
+            continue
+    return out
+
+
+def scrub(text: str, patterns: list[re.Pattern[str]]) -> str:
+    """Mask secrets appearing inside a string value.
+
+    Where a pattern names a ``secret`` group only that group is replaced, so
+    ``TOKEN=sk-live-x`` keeps the name that makes the record readable and loses
+    the part that makes it dangerous.
+    """
+    for rx in patterns:
+        narrow = "secret" in rx.groupindex
+
+        def _sub(m: re.Match[str], narrow: bool = narrow) -> str:
+            if not narrow or m.start("secret") < 0:
+                return MASK
+            whole, base = m.group(), m.start()
+            return (
+                whole[: m.start("secret") - base]
+                + MASK
+                + whole[m.end("secret") - base :]
+            )
+
+        text = rx.sub(_sub, text)
+    return text
+
+
+def redact(
+    value: Any,
+    keys: list[str],
+    patterns: list[str] | None = None,
+    _depth: int = 0,
+    _rx: list[re.Pattern[str]] | None = None,
+) -> Any:
+    """Recursively mask credentials, by key name and by value shape.
 
     Arguments are written to the audit ledger, and the ledger is WORM in
-    production -- a secret that lands there cannot be taken back out.
+    production -- a secret that lands there cannot be taken back out. Key-based
+    masking catches ``{"password": ...}``; value scanning catches the same
+    secret smuggled in under an innocent key, which is how it usually arrives.
     """
     if _depth > 12:
         return value
+    if _rx is None:
+        _rx = _compile_redactors(
+            DEFAULT_REDACT_PATTERNS if patterns is None else patterns
+        )
     lowered = [k.lower() for k in keys]
     if isinstance(value, dict):
         out = {}
         for k, v in value.items():
             if any(term in str(k).lower() for term in lowered):
-                out[k] = "***redacted***"
+                out[k] = MASK
             else:
-                out[k] = redact(v, keys, _depth + 1)
+                out[k] = redact(v, keys, patterns, _depth + 1, _rx)
         return out
     if isinstance(value, list):
-        return [redact(v, keys, _depth + 1) for v in value]
-    if isinstance(value, str) and len(value) > 2000:
-        return value[:2000] + f"...<truncated {len(value) - 2000} chars>"
+        return [redact(v, keys, patterns, _depth + 1, _rx) for v in value]
+    if isinstance(value, str):
+        if _rx:
+            value = scrub(value, _rx)
+        if len(value) > 2000:
+            return value[:2000] + f"...<truncated {len(value) - 2000} chars>"
     return value

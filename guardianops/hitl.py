@@ -20,6 +20,9 @@ from typing import Any
 ALLOW_ONCE = "allow"
 BLOCK = "block"
 WHITELIST = "whitelist"
+# End the run, not just this call. Declining one call leaves an agent free to
+# retry a variant immediately; this is the answer to that.
+KILL_RUN = "kill_run"
 TIMEOUT = "timeout"
 UNAVAILABLE = "unavailable"
 
@@ -75,11 +78,15 @@ class TtyApprover:
                 answer = line.strip().lower()
                 if answer in ("a", "allow"):
                     return ALLOW_ONCE
-                if answer in ("k", "kill", "d", "deny", "b", "block"):
+                if answer in ("b", "block", "d", "deny", "n", "no"):
                     return BLOCK
                 if answer in ("w", "whitelist"):
                     return WHITELIST
-                tty_out.write("  expected [a]llow once, [k]ill, or [w]hitelist: ")
+                if answer in ("k", "kill"):
+                    return KILL_RUN
+                tty_out.write(
+                    "  expected [a]llow once, [b]lock, [w]hitelist, or [k]ill run: "
+                )
                 tty_out.flush()
 
     @staticmethod
@@ -106,7 +113,7 @@ class TtyApprover:
                 lines.append(f"    {line[:68]}")
         lines += [
             _RULE,
-            f"  [a] allow once   [k] kill the call   [w] whitelist for this run"
+            f"  [a] allow once   [b] block   [w] whitelist for run   [k] KILL RUN"
             f"   ({int(timeout)}s)",
             "  > ",
         ]

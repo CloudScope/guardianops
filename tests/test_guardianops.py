@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from guardianops import audit, jsonrpc, policy, scan  # noqa: E402
+from guardianops import audit, hitl, jsonrpc, policy, scan  # noqa: E402
 from guardianops.baseline import InvocationBaseline  # noqa: E402
 from guardianops.pins import CHANGED, NEW, OK, PinStore  # noqa: E402
 from guardianops.proxy import Proxy  # noqa: E402
@@ -1016,6 +1016,459 @@ class TestPackageExports(unittest.TestCase):
         import guardianops
         for name in guardianops.__all__:
             self.assertTrue(hasattr(guardianops, name), name)
+
+
+class _Approver:
+    """Answers each intercept with a scripted reply."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.asked = 0
+
+    async def request(self, panel, timeout):
+        self.asked += 1
+        return self.answers.pop(0) if self.answers else "block"
+
+
+class TestCircuitBreaker(unittest.IsolatedAsyncioTestCase):
+    """Blocking one call governs one call; the breaker ends the run."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.tmp = Path(self.dir.name)
+        self.sent: list[dict] = []
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def make_proxy(self, cfg, up, approver=None):
+        cfg.audit_path = str(self.tmp / "audit.jsonl")
+        cfg.pin.path = str(self.tmp / "pins.json")
+        proxy = Proxy(cfg, up, run_id="test",
+                      approver=approver or _Approver(),
+                      baseline_path=str(self.tmp / "baseline.json"))
+        proxy._to_client = self._capture  # type: ignore[method-assign]
+        return proxy
+
+    async def _capture(self, message):
+        self.sent.append(message)
+
+    @staticmethod
+    def _call(n, tool="attach_role_policy"):
+        return {"jsonrpc": "2.0", "id": n, "method": "tools/call",
+                "params": {"name": tool, "arguments": {}}}
+
+    def _cfg(self, **breaker):
+        cfg = policy.Config.from_dict({
+            "mode": "enforce",
+            "tools": {"allow": ["read_file"], "tiers": {"read": ["read_file"]}},
+            "breaker": {"onTrip": "block", **breaker},
+        })
+        return cfg
+
+    async def test_breaker_stops_the_run_after_consecutive_blocks(self):
+        up, cfg = FakeUpstream(), self._cfg(consecutiveBlocks=3)
+        proxy = self.make_proxy(cfg, up)
+        for i in range(5):
+            await proxy._handle_tool_call(self._call(i))
+        self.assertEqual(up.tool_calls(), [])
+        self.assertIn("circuit breaker", proxy.stopped)
+        self.assertIn("3 calls blocked in a row", proxy.stopped)
+
+    async def test_an_allowed_call_resets_the_streak(self):
+        """An agent that is blocked, adapts, then works has not misbehaved."""
+        up, cfg = FakeUpstream(), self._cfg(consecutiveBlocks=3)
+        proxy = self.make_proxy(cfg, up)
+        for i in range(2):
+            await proxy._handle_tool_call(self._call(i))
+        await proxy._handle_tool_call(self._call(99, tool="read_file"))
+        for i in range(2):
+            await proxy._handle_tool_call(self._call(100 + i))
+        self.assertIsNone(proxy.stopped)
+        self.assertEqual(proxy.counters.consecutive_blocks, 2)
+
+    async def test_total_blocks_trips_even_when_interleaved(self):
+        up, cfg = FakeUpstream(), self._cfg(consecutiveBlocks=0, totalBlocks=3)
+        proxy = self.make_proxy(cfg, up)
+        for i in range(3):
+            await proxy._handle_tool_call(self._call(i))
+            await proxy._handle_tool_call(self._call(50 + i, tool="read_file"))
+        self.assertIn("3 calls blocked in this run", proxy.stopped)
+
+    async def test_stopped_run_refuses_everything_afterwards(self):
+        """Including tools that would otherwise be allowed."""
+        up, cfg = FakeUpstream(), self._cfg(consecutiveBlocks=2)
+        proxy = self.make_proxy(cfg, up)
+        for i in range(2):
+            await proxy._handle_tool_call(self._call(i))
+        self.assertIsNotNone(proxy.stopped)
+        self.sent.clear()
+        await proxy._handle_tool_call(self._call(7, tool="read_file"))
+        self.assertEqual(up.tool_calls(), [])
+        self.assertIn("stopped this run", str(self.sent[-1]))
+
+    async def test_warn_mode_records_but_never_interferes(self):
+        up = FakeUpstream()
+        cfg = self._cfg(consecutiveBlocks=2)
+        cfg.breaker.on_trip = "warn"
+        proxy = self.make_proxy(cfg, up)
+        for i in range(4):
+            await proxy._handle_tool_call(self._call(i))
+        self.assertIsNone(proxy.stopped)
+        events = [r["event"] for r in audit.read_all(cfg.audit_path)]
+        self.assertIn("breaker.warn", events)
+
+    async def test_shadow_mode_never_stops_a_run(self):
+        """Shadow observes. A breaker that halts a shadow run is not shadow."""
+        up = FakeUpstream()
+        cfg = self._cfg(consecutiveBlocks=2)
+        cfg.mode = policy.SHADOW
+        proxy = self.make_proxy(cfg, up)
+        for i in range(4):
+            await proxy._handle_tool_call(self._call(i))
+        self.assertIsNone(proxy.stopped)
+        self.assertEqual(len(up.tool_calls()), 4)
+
+    async def test_disabled_by_default_configuration(self):
+        cfg = policy.Config.from_dict({"breaker": {"consecutiveBlocks": 0}})
+        self.assertFalse(cfg.breaker.enabled)
+        self.assertIsNone(cfg.breaker.tripped_by(100, 100))
+
+    async def test_breaker_trip_is_recorded_in_the_ledger(self):
+        up, cfg = FakeUpstream(), self._cfg(consecutiveBlocks=2)
+        proxy = self.make_proxy(cfg, up)
+        for i in range(2):
+            await proxy._handle_tool_call(self._call(i))
+        proxy.audit.close()
+        records = list(audit.read_all(cfg.audit_path))
+        stopped = [r for r in records if r["event"] == "run.stopped"]
+        self.assertEqual(len(stopped), 1)
+        self.assertIn("circuit breaker", stopped[0]["reason"])
+
+    async def test_stop_is_idempotent(self):
+        up, cfg = FakeUpstream(), self._cfg(consecutiveBlocks=1)
+        proxy = self.make_proxy(cfg, up)
+        for i in range(4):
+            await proxy._handle_tool_call(self._call(i))
+        proxy.audit.close()
+        stopped = [r for r in audit.read_all(cfg.audit_path)
+                   if r["event"] == "run.stopped"]
+        self.assertEqual(len(stopped), 1, "the run must only be stopped once")
+
+
+class TestKillSwitch(unittest.IsolatedAsyncioTestCase):
+    """An operator can end the run, not merely decline one call."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.tmp = Path(self.dir.name)
+        self.sent: list[dict] = []
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    async def _capture(self, message):
+        self.sent.append(message)
+
+    def make_proxy(self, approver):
+        cfg = policy.Config.from_dict({
+            "mode": "enforce",
+            "tools": {"tiers": {"destructive": ["deploy"]}},
+            "breaker": {"consecutiveBlocks": 0},
+        })
+        cfg.audit_path = str(self.tmp / "audit.jsonl")
+        cfg.pin.path = str(self.tmp / "pins.json")
+        self.cfg = cfg
+        self.up = FakeUpstream()
+        proxy = Proxy(cfg, self.up, run_id="test", approver=approver,
+                      baseline_path=str(self.tmp / "baseline.json"))
+        proxy._to_client = self._capture  # type: ignore[method-assign]
+        return proxy
+
+    @staticmethod
+    def _call(n, tool="deploy"):
+        return {"jsonrpc": "2.0", "id": n, "method": "tools/call",
+                "params": {"name": tool, "arguments": {}}}
+
+    async def test_kill_run_stops_the_run(self):
+        approver = _Approver(hitl.KILL_RUN)
+        proxy = self.make_proxy(approver)
+        await proxy._handle_tool_call(self._call(1))
+        self.assertIn("operator ended the run", proxy.stopped)
+        self.assertEqual(self.up.tool_calls(), [])
+
+    async def test_no_further_approvals_are_requested_after_a_kill(self):
+        """The point of a kill switch: the operator stops being asked."""
+        approver = _Approver(hitl.KILL_RUN)
+        proxy = self.make_proxy(approver)
+        for i in range(4):
+            await proxy._handle_tool_call(self._call(i))
+        self.assertEqual(approver.asked, 1)
+
+    async def test_blocking_one_call_does_not_stop_the_run(self):
+        approver = _Approver(hitl.BLOCK, hitl.BLOCK)
+        proxy = self.make_proxy(approver)
+        await proxy._handle_tool_call(self._call(1))
+        self.assertIsNone(proxy.stopped)
+        self.assertEqual(approver.asked, 1)
+
+    async def test_kill_is_recorded_in_the_ledger(self):
+        proxy = self.make_proxy(_Approver(hitl.KILL_RUN))
+        await proxy._handle_tool_call(self._call(1))
+        proxy.audit.close()
+        stopped = [r for r in audit.read_all(self.cfg.audit_path)
+                   if r["event"] == "run.stopped"]
+        self.assertEqual(len(stopped), 1)
+        self.assertIn("operator", stopped[0]["reason"])
+
+
+class TestSignedLedger(unittest.TestCase):
+    """HMAC moves the root of trust off the ledger and onto a key."""
+
+    KEY = b"0123456789abcdef0123456789abcdef"
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.led = str(Path(self.dir.name) / "audit.jsonl")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def _write(self, key, n=3):
+        log = audit.AuditLog(self.led, "run-1", key=key)
+        for i in range(n):
+            log.record("tool.call", tool=f"t{i}", outcome="allow")
+        log.close()
+
+    def _forge(self, *, key=None, drop_alg=True):
+        """Rewrite the ledger and recompute a chain the attacker can produce.
+
+        ``key`` is what the *attacker* holds, which is the whole question: with
+        the real key a forgery is undetectable by design, so the interesting
+        cases are an attacker with no key at all, or with the wrong one.
+        """
+        records = list(audit.read_all(self.led))
+        records[1]["tool"] = "exfiltrate"
+        prev = audit.GENESIS
+        for record in records:
+            if drop_alg:
+                record.pop("alg", None)
+            record["prev_hash"] = prev
+            record.pop("hash", None)
+            record["hash"] = audit._chain(prev, record, key)
+            prev = record["hash"]
+        Path(self.led).write_text(
+            "".join(json.dumps(r, separators=(",", ":")) + "\n" for r in records)
+        )
+
+    def test_signed_ledger_verifies_with_its_key(self):
+        self._write(self.KEY)
+        self.assertEqual(audit.verify(self.led, self.KEY), (True, 3, None))
+
+    def test_wrong_key_fails(self):
+        self._write(self.KEY)
+        ok, _, error = audit.verify(self.led, b"x" * 32)
+        self.assertFalse(ok)
+        self.assertIn("altered", error)
+
+    def test_signed_ledger_without_a_key_raises_rather_than_alleging_tampering(self):
+        self._write(self.KEY)
+        with self.assertRaises(audit.KeyRequired):
+            audit.verify(self.led)
+
+    def test_a_recomputed_unkeyed_chain_is_caught(self):
+        """The attack the unkeyed chain cannot survive: rewrite everything."""
+        self._write(self.KEY)
+        self._forge()
+        # Unkeyed verification accepts the forgery -- this is why keys exist.
+        self.assertTrue(audit.verify(self.led)[0])
+        ok, _, error = audit.verify(self.led, self.KEY)
+        self.assertFalse(ok)
+        self.assertIn("downgraded", error)
+
+    def test_forgery_that_keeps_the_marker_but_lacks_the_key_is_caught(self):
+        """An attacker who leaves "alg" in place still cannot produce the HMACs."""
+        self._write(self.KEY)
+        self._forge(key=b"w" * 32, drop_alg=False)
+        ok, _, error = audit.verify(self.led, self.KEY)
+        self.assertFalse(ok)
+        self.assertIn("altered", error)
+
+    def test_holding_the_key_defeats_the_scheme_entirely(self):
+        """Stated so the guarantee is not mistaken for more than it is: HMAC
+        protects against someone who can write the ledger but not read the key.
+        Co-locating the two buys nothing, which is why validate() warns."""
+        self._write(self.KEY)
+        self._forge(key=self.KEY, drop_alg=False)
+        self.assertTrue(audit.verify(self.led, self.KEY)[0])
+
+    def test_unsigned_ledgers_are_unchanged_and_still_verify(self):
+        self._write(None)
+        self.assertEqual(audit.verify(self.led), (True, 3, None))
+        for record in audit.read_all(self.led):
+            self.assertNotIn("alg", record)
+
+    def test_tampering_is_still_caught_without_a_key(self):
+        """The unkeyed chain keeps its original property: edits are evident."""
+        self._write(None)
+        records = list(audit.read_all(self.led))
+        records[1]["tool"] = "exfiltrate"
+        Path(self.led).write_text(
+            "".join(json.dumps(r, separators=(",", ":")) + "\n" for r in records)
+        )
+        self.assertFalse(audit.verify(self.led)[0])
+
+    def test_load_key_rejects_empty_and_short_keys(self):
+        path = Path(self.dir.name) / "k"
+        path.write_text("")
+        with self.assertRaises(ValueError):
+            audit.load_key(str(path))
+        path.write_text("tooshort")
+        with self.assertRaises(ValueError):
+            audit.load_key(str(path))
+
+    def test_load_key_strips_trailing_newline(self):
+        path = Path(self.dir.name) / "k"
+        path.write_text("0123456789abcdef\n")
+        self.assertEqual(audit.load_key(str(path)), b"0123456789abcdef")
+
+    def test_exposed_key_permissions_are_detected(self):
+        path = Path(self.dir.name) / "k"
+        path.write_text("0123456789abcdef")
+        path.chmod(0o600)
+        self.assertFalse(audit.key_is_exposed(str(path)))
+        path.chmod(0o644)
+        self.assertTrue(audit.key_is_exposed(str(path)))
+
+    def test_config_reports_an_unusable_key(self):
+        cfg = policy.Config.from_dict({"auditKey": "/nonexistent/key"})
+        self.assertTrue(any(f.path == "auditKey" for f in cfg.errors()))
+
+
+class TestValueRedaction(unittest.TestCase):
+    """Secrets arrive under innocent keys more often than telling ones."""
+
+    def setUp(self):
+        self.cfg = policy.Config()
+
+    def test_the_readme_example(self):
+        out = self.cfg.redact({"cmd": "export TOKEN=sk-live-abcdef1234567890xyz"})
+        self.assertNotIn("sk-live", out["cmd"])
+        # The name survives so the record stays readable.
+        self.assertIn("TOKEN=", out["cmd"])
+
+    def test_issuer_prefixed_secrets(self):
+        for secret in (
+            "AKIAIOSFODNN7EXAMPLE",
+            "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+            "xoxb-1234567890-abcdefghij",
+            "AIzaSyA1234567890abcdefghijklmnopqrstuv",
+            "glpat-abcdefghij1234567890",
+        ):
+            out = self.cfg.redact({"note": f"value {secret} here"})
+            self.assertNotIn(secret, out["note"], secret)
+
+    def test_jwt_in_an_authorization_header(self):
+        token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk"
+        out = self.cfg.redact({"headers": {"X-Auth": f"Bearer {token}"}})
+        self.assertNotIn(token, out["headers"]["X-Auth"])
+
+    def test_password_in_a_connection_string(self):
+        out = self.cfg.redact({"dsn": "postgres://admin:sup3rs3cret@db:5432/app"})
+        self.assertNotIn("sup3rs3cret", out["dsn"])
+        self.assertIn("admin", out["dsn"])
+        self.assertIn("db:5432", out["dsn"])
+
+    def test_whole_pem_block_not_just_its_header(self):
+        pem = ("-----BEGIN RSA PRIVATE KEY-----\n"
+               "MIIEowIBAAKCAQEAsecretmaterial\n"
+               "-----END RSA PRIVATE KEY-----")
+        out = self.cfg.redact({"body": pem})
+        self.assertNotIn("secretmaterial", out["body"])
+
+    def test_truncated_pem_block(self):
+        out = self.cfg.redact({"body": "-----BEGIN PRIVATE KEY-----\nMIIEowIBsecret"})
+        self.assertNotIn("secret", out["body"])
+
+    def test_ordinary_values_are_left_alone(self):
+        """A redactor that mangles readable records has its own cost."""
+        for value in (
+            "SELECT * FROM users WHERE id = 42",
+            "/workspace/src/main.py",
+            "https://example.com/docs/page?id=7",
+            "sk-1234",
+            "the quick brown fox",
+        ):
+            self.assertEqual(self.cfg.redact({"v": value})["v"], value, value)
+
+    def test_key_based_redaction_still_applies(self):
+        out = self.cfg.redact({"password": "hunter2", "nested": {"api_key": "x"}})
+        self.assertEqual(out["password"], policy.MASK)
+        self.assertEqual(out["nested"]["api_key"], policy.MASK)
+
+    def test_secrets_inside_lists_and_nesting(self):
+        out = self.cfg.redact({"argv": ["--token", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"]})
+        self.assertNotIn("ghp_", str(out))
+
+    def test_value_scanning_can_be_disabled(self):
+        cfg = policy.Config.from_dict({"redactPatterns": []})
+        raw = "export TOKEN=sk-live-abcdef1234567890xyz"
+        self.assertEqual(cfg.redact({"cmd": raw})["cmd"], raw)
+
+    def test_custom_patterns_replace_the_defaults(self):
+        cfg = policy.Config.from_dict({"redactPatterns": [r"CUST-(?P<secret>\d+)"]})
+        out = cfg.redact({"note": "id CUST-99887766"})
+        self.assertIn("CUST-", out["note"])
+        self.assertNotIn("99887766", out["note"])
+
+    def test_an_invalid_pattern_is_reported_but_never_stops_redaction(self):
+        cfg = policy.Config.from_dict({"redactPatterns": ["([unclosed"]})
+        self.assertTrue(any(f.path == "redactPatterns" for f in cfg.errors()))
+        self.assertEqual(cfg.redact({"password": "x"})["password"], policy.MASK)
+
+    def test_long_values_are_still_truncated_after_scrubbing(self):
+        out = self.cfg.redact({"blob": "a" * 5000})
+        self.assertIn("truncated", out["blob"])
+
+
+class TestNullTolerance(unittest.TestCase):
+    """A JSON null in a list-valued key means "not set", not "empty"."""
+
+    def test_null_list_keys_fall_back_to_defaults(self):
+        cfg = policy.Config.from_dict({
+            "redactKeys": None,
+            "redactPatterns": None,
+            "tools": {"allow": None, "deny": None, "tiers": None},
+            "approval": {"requireFor": None, "contextExemptTiers": None},
+            "scope": {"terms": None, "denyPatterns": None},
+            "scan": {"definitionPatterns": None, "responsePatterns": None},
+        })
+        self.assertEqual(cfg.validate(), [])
+        self.assertEqual(cfg.redact_keys, policy.DEFAULT_REDACT)
+        self.assertEqual(cfg.approval.require_for, [policy.DESTRUCTIVE, policy.UNCLASSIFIED])
+        self.assertTrue(cfg.scan.definition_patterns)
+        self.assertEqual(cfg.allow, [])
+        self.assertEqual(cfg.tiers, {})
+
+    def test_null_redact_keys_does_not_crash_redaction(self):
+        """It used to raise TypeError deep inside the ledger write."""
+        cfg = policy.Config.from_dict({"redactKeys": None})
+        self.assertEqual(cfg.redact({"password": "x"})["password"], policy.MASK)
+
+    def test_meaningful_nulls_are_still_honoured(self):
+        """contextThreshold and scope.threshold use null to mean "do not enforce"."""
+        cfg = policy.Config.from_dict({
+            "approval": {"contextThreshold": None},
+            "scope": {"threshold": None},
+        })
+        self.assertIsNone(cfg.approval.context_threshold)
+        self.assertIsNone(cfg.scope.threshold)
+
+    def test_an_empty_list_still_means_empty(self):
+        """Explicit [] must remain distinguishable from null."""
+        cfg = policy.Config.from_dict({"redactPatterns": []})
+        raw = "export TOKEN=sk-live-abcdef1234567890xyz"
+        self.assertEqual(cfg.redact({"cmd": raw})["cmd"], raw)
 
 
 if __name__ == "__main__":

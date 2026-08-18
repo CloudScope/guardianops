@@ -142,9 +142,13 @@ that is what shadow mode is for.
 | Command | What it does |
 |---|---|
 | `run` | Proxy an MCP server with governance applied |
+| `validate` | Check a policy for errors before it ships; exits non-zero in CI |
 | `verify` | Walk the audit ledger's hash chain and report the first break |
 | `report` | Summarize runs: outcomes, held calls, peak risk, withheld tools |
 | `pins` | Show the pinned tool definitions |
+
+`run` validates the policy at startup and refuses to enforce a broken one.
+`verify` takes `--key` (or `--config`) for a signed ledger.
 
 ## What it enforces
 
@@ -222,9 +226,11 @@ enforcing.
 **Hash-chained audit ledger.** Every record commits to its predecessor. Editing
 or deleting any line invalidates everything after it and `verify` names the
 break — and distinguishes a truncated tail (a crash) from an altered record in
-the middle (a security event). Arguments are redacted for credential-shaped keys
-before they are written, because the ledger is WORM in production and a leaked
-secret cannot be taken back out.
+the middle (a security event). Set `auditKey` and each record is signed with
+HMAC instead of a bare digest, so rewriting the file and recomputing the chain no
+longer produces a ledger that verifies. Arguments are redacted by key name and by
+value shape before they are written, because the ledger is WORM in production and
+a leaked secret cannot be taken back out.
 
 ## Risk scoring
 
@@ -311,23 +317,25 @@ Being explicit, because these gaps are load-bearing:
   Policies can be built programmatically (`Config.from_dict`) as well as loaded
   from JSON, but there are no per-agent or per-tenant policy bundles, and no
   language for expressing rules beyond the config schema.
-- **The ledger is tamper-evident, not tamper-proof.** Anyone who can write the
-  file can recompute the whole chain. Production wants an HMAC keyed outside the
-  agent host, or records shipped to an append-only sink as they are written.
-- **No kill switch and no circuit breaker.** A human can decline one call but
-  cannot terminate the run, and an agent that gets blocked and immediately
-  retries a variant will keep going.
-- **Redaction is key-based only.** A secret inside a value —
-  `{"cmd": "export TOKEN=sk-live-..."}` — reaches the ledger untouched.
+- **The ledger is only as tamper-proof as the key.** Unsigned, it is
+  tamper-*evident*: anyone who can rewrite the file can recompute the whole chain.
+  Set `auditKey` and records are signed with HMAC instead, which detects exactly
+  that forgery — but the guarantee is the key's, so a key file on the agent host
+  beside the ledger it signs buys little. Production wants the key held off-host,
+  or records shipped to an append-only sink as they are written.
+- **Redaction is a tripwire, not a guarantee.** Credentials are masked by key
+  name and by value shape — issuer-prefixed tokens, JWTs, PEM blocks,
+  `TOKEN=...` assignments, passwords in connection strings. Pattern matching
+  against arbitrary strings catches the recognisable and misses the novel, so a
+  secret in a shape nobody has seen still reaches the ledger.
 - **Novelty is binary.** No sequence model, so an unremarkable set of tools in a
   bizarre order scores zero on tool drift.
-- **`upstream/http.py` has no test coverage**, and its SSE parser is the
-  fiddliest code here.
 - **Cold start.** A new agent has no baseline, so novelty fires on everything for
   the first run and the deterministic controls carry the load.
-- **The HTTP transport is implemented but lightly exercised.** Server-initiated
-  streams over a standalone `GET` are not handled; only responses to POSTed
-  messages are.
+- **Server-initiated SSE streams are not handled.** The HTTP transport reads
+  responses to POSTed messages, including SSE bodies; a standalone `GET` stream
+  opened by the server is not consumed, so server-pushed notifications on that
+  channel are missed.
 
 ## Layout
 
